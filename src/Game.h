@@ -5,7 +5,10 @@
 #include "entities/Entities.h"
 #include "entities/gametasks/CTaskWorm.h"
 #include "entities/tasks/CTaskTurnGame.h"
+#include "entities/tasks/CTaskTeam.h"
 #include "Constants.h"
+#include <set>
+#include <vector>
 
 class Game {
 private:
@@ -22,6 +25,8 @@ private:
 
 	inline static DWORD addrCTaskTurnGameHandleMessage = 0;
 
+	inline static std::set<CTaskTeam*> liveTeams;
+
 	static int __stdcall hookConstructGlobalContext(int a1);
 //	static int __fastcall hookConstructCTaskTurnGame(DWORD ECX, DWORD EDX, DWORD This, int y);
 //	static int __stdcall hookCGameTaskPhysics(int a1, CGameTask *object, int y);
@@ -31,11 +36,20 @@ private:
 	static int __fastcall hookDestroyGlobalContext(int This, int EDX);
 
 	static DWORD __stdcall hookConstructDDGameWrapper(DWORD DD_Game_a2, DWORD DD_Display_a3, DWORD DS_Sound_a4, DWORD DD_Keyboard_a5, DWORD DD_Mouse_a6, DWORD WAV_CDrom_a7, DWORD WS_GameNet_a8);
+
+	static int onTeamVt0(CTaskTeam *This, int a2);
+	static int onTeamVt4(CTaskTeam *This, int heap);
 public:
 	static DWORD getAddrDDGame();
 	static DWORD getAddrGameinfoObject();
 	static DWORD getAddrTurnGameObject();
 	static DWORD getAddrGameGlobal();
+	static int *getAddrGameScene();
+	static bool isValidDdGame();
+	static bool isValidGameGlobal();
+	static void probeAndInvalidateStalePointers();
+	static void invalidateStaleGamePointers();
+	static bool hasValidFrontendDrawContext();
 
 	static DWORD getAddrDdDisplay();
 	static DWORD getAddrDsSound();
@@ -46,7 +60,14 @@ public:
 
 	static DWORD getAddrPCLandscape();
 
-//	static void listAllTasks();
+	static bool isHost();
+	static bool isReplayPlayback();
+	static bool isMatchRunning();
+	static std::vector<CTaskTeam*> getTeams();
+	static void clearLiveTeams();
+
+	static std::string listAllTasks();
+	static std::string getTaskTypeName(int classtype);
 	static int install(SignatureScanner &, module);
 //	static void spawnObject(SpawnObjectParams * params);
 

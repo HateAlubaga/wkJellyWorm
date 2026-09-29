@@ -10,10 +10,9 @@
 #include "BitmapExtension.h"
 
 #include <array>
-//#include <GL/gl.h>
-//#include <GL/glu.h>
 #include <GL/glew.h>
 #include <map>
+#include <windows.h>
 #include "../Sprites.h"
 
 
@@ -60,12 +59,6 @@ public:
 		DWORD dword7C;
 	};
 
-//	struct BitmapEntry {
-//		Bitmap::BitmapImage* bitmap;
-//		GLuint framebuffer;
-//		GLuint texture;
-//	};
-
 	struct BitmapDescriptor {
 		DWORD vtable;
 		DWORD width_dword4;
@@ -78,12 +71,12 @@ public:
 
 
 
-
 private:
 	static int CTaskTurnGame_vt8(CTaskTurnGame *, CTask * sender, Constants::TaskMessage mtype, size_t size, void * data);
 
 	static DWORD __fastcall hookDrawBitmapOnBitmapAnyDepth(int flags, int srcOffsetY, int posX, int posY, int endX, int endY, int srcOffsetX, Bitmap::BitmapImage *Src, Bitmap::BitmapImage *Dst, int a10);
-	static DWORD __stdcall hookOpenGLInit(int width, int height);
+	// WA OpenGLInit is thiscall: ECX=OpenGLRenderer*, stack width/height.
+	static DWORD __fastcall hookOpenGLInit(OpenGLRenderer *This, int EDX, int width, int height);
 
 	static DWORD __fastcall hookDestroyBitmapDescriptor(Renderer::BitmapDescriptor * This, int EDX, int a2);
 	static BitmapDescriptor* __stdcall hookConstructBitmapDescriptor();
@@ -93,9 +86,16 @@ private:
 	static void __stdcall hookRenderDrawingQueue(DWORD dddisplay, DWORD a3);
 	static DWORD __stdcall hookWriteScreenPalette(DWORD a2);
 
+	static void disableRenderer(const char * reason);
+	// Per-frame GL override: clear/setup backbuffer at RenderScene (before bitmap blits).
+	static void frameOverride();
+
 	static inline int screenWidth, screenHeight;
 	static inline bool glewInitialized = false;
 	static inline bool glContextCreated = false;
+	static inline bool shadersCompiled = false;
+	static inline HDC glHdc = nullptr;
+	static inline HGLRC glHglrc = nullptr;
 	static inline DWORD * addrBitmapDescriptorVTable = nullptr;
 	static inline DWORD addrScreenPalette = 0;
 	static inline bool forceDisableNativeDrawing = false;
@@ -106,8 +106,15 @@ public:
 	static int onConstructGlobalContext(int a1);
 	static int install(SignatureScanner &, module);
 
+	static bool ensureGLContext();
+	// True only when custom GL path is actually live (safe to alter native draw).
+	static bool isActive();
+	// If the game already created a GL context (e.g. before our DLL hooked OpenGLInit), attach to it.
+	static bool tryLateInitGL();
 	static void toggleNativeDrawing();
 	friend class Drawing;
+	friend class BitmapExtension;
+	friend class GLDraw;
 };
 
 

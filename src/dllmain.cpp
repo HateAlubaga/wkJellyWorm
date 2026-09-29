@@ -33,6 +33,7 @@
 #include "Landscape.h"
 #include "Sounds.h"
 #include "Sprites.h"
+#include "Music.h"
 #include "Explosions.h"
 #include "Weapons.h"
 #include "renderer/Bitmap.h"
@@ -43,8 +44,13 @@
 #include "Packets.h"
 #include "Lua.h"
 #include "Hooks.h"
+#include "FrameScheduler.h"
+#include "Hud.h"
+#include "LobbyGui.h"
+#include "JellyRNG.h"
 #include <chrono>
 #include <MinHook.h>
+#include "CrashReporter.h"
 
 int install() {
 	if(Config::devConsoleEnabled) DevConsole::install();
@@ -89,6 +95,7 @@ int install() {
 	Config::install(SigScanner, mod);
 	Chat::install(SigScanner, mod);
 	Sounds::install(SigScanner, mod);
+	Music::install(SigScanner, mod);
 	Sprites::install(SigScanner, mod);
 	Landscape::install(SigScanner, mod);
 	Explosions::install(SigScanner, mod);
@@ -100,8 +107,41 @@ int install() {
 	Drawing::install(SigScanner, mod);
 
 	Lua::getInstance();
+	Hud::install();
+	FrameScheduler::install();
+	JellyRNG::install(SigScanner, mod);
+	LobbyGui::install(SigScanner, mod);
 
 	PackageManager::getInstance().scanPackages();
+	PackageManager::getInstance().scanJpxPackages();
+	CrashReporter::install();
+
+	// [general] SelfTest=1: load the [autostart] packages right here, at the
+	// end of install, instead of waiting for a frontend screen change.
+	//
+	// applyAutostart normally runs from hookFrontendChangeScreen, which only
+	// fires when the player MOVES between screens -- the menu the game opens on
+	// is not a change, so an automated launch never triggers it and the whole
+	// package layer stays untestable without a human clicking into a match.
+	// Every Lua global a package script needs has been registered by the
+	// install() calls above, so this is a valid point to load them.
+	if(Config::selfTestEnabled) {
+		// Truncate BEFORE loading: applyAutostart appends a FAILED line per
+		// package that throws, and truncating afterwards would erase exactly
+		// the diagnostics this exists to capture.
+		FILE *f = nullptr;
+		if(fopen_s(&f, "jelly\\selftest.log", "w") == 0 && f) {
+			fprintf(f, "selftest: loading [autostart] packages\n");
+			fclose(f);
+		}
+		int applied = PackageManager::getInstance().applyAutostart();
+		f = nullptr;
+		if(fopen_s(&f, "jelly\\selftest.log", "a") == 0 && f) {
+			fprintf(f, "selftest: applied %d package(s)\n", applied);
+			fclose(f);
+		}
+		printf("SelfTest: applyAutostart at install applied %d package(s)\n", applied);
+	}
 	return 0;
 }
 

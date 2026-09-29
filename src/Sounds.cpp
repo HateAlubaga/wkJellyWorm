@@ -2,6 +2,7 @@
 #include "Hooks.h"
 #include "Game.h"
 #include "Lua.h"
+#include "Utils.h"
 #include <sol/sol.hpp>
 
 
@@ -26,7 +27,14 @@ void Sounds::onConstructGlobalContext(int a1) {
 }
 
 int Sounds::registerCustomSound(std::string filename) {
-	customSounds.push_back(filename);
+	// Resolve against the active package's own directory now -- the actual
+	// load happens later from onConstructGlobalContext, by which point no
+	// package's directory is active, so a bare filename would be looked up
+	// relative to WA's process directory and silently fail to load.
+	std::string resolved = Utils::resolveAssetPath(filename);
+	if(resolved != filename)
+		printf("registerCustomSound: resolved '%s' -> '%s'\n", filename.c_str(), resolved.c_str());
+	customSounds.push_back(resolved);
 	return customSoundStartingId + customSounds.size() - 1;
 }
 

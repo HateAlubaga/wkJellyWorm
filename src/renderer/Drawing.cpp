@@ -6,15 +6,14 @@
 #include "Drawing.h"
 #include "Bitmap.h"
 #include "Renderer.h"
+#include "GLDraw.h"
+#include "DebugLog.h"
 
 
 
 DWORD (__fastcall *origDrawLandscape)(int a1, DWORD *a2, Renderer::BitmapDescriptor * Src, int a4, int a5, int a6, int a7, int a8, int a9, int a10);
 DWORD __fastcall Drawing::hookDrawLandscape(int a1, DWORD *a2, Renderer::BitmapDescriptor * Src, int posX, int posY, int offsetX, int offsetY, int width, int height, int flag) {
-//	printf("drawLandscape: a1: %X a2: %X a3: %X posX: %d posY: %d a6: %d a7: %d width: %d height: %d flag: %d\n",
-//		   a1, (DWORD)a2, a3, posX, posY, a6, a7, width, height, flag
-//		);
-	if(Config::rendererEnabled) {
+	if(Renderer::isActive()) {
 		if(Src->vtable == (DWORD)Renderer::addrBitmapDescriptorVTable) {
 			if(!Src->bitmap) {
 				//create a fake bitmap entry so it works with the drawing func
@@ -38,20 +37,17 @@ DWORD __fastcall Drawing::hookDrawLandscape(int a1, DWORD *a2, Renderer::BitmapD
 	}
 	if(!Renderer::forceDisableNativeDrawing)
 		return origDrawLandscape(a1, a2, Src, posX, posY, offsetX, offsetY, width, height, flag);
+	return 0;
 }
 
-//int *__fastcall maybe_redraw_frontend_landscape_bitmap_sub_5A0BD0(_DWORD *a1, _DWORD *a2, int a3, int a4, int a5, int a6, int a7, size_t Size, int a9, int a10)
 DWORD (__fastcall *origRedrawFrontendBitmap)(Renderer::BitmapDescriptor *  a1, DWORD a2, int a3, int a4, Renderer::BitmapDescriptor *  a5, int a6, int a7, int a8, int a9, int a10);
 DWORD __fastcall Drawing::hookRedrawFrontendBitmap(Renderer::BitmapDescriptor * a1, DWORD a2, int a3, int a4, Renderer::BitmapDescriptor *  a5, int a6, int a7, int a8, int a9, int a10) {
-//	if(Config::rendererEnabled) {
-//		printf("RedrawFrontendBitmap %X a2: %X a3: %d a4: %d a5: %X a6: %d a7: %d a8: %d a9: %d a10: %d\n", a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
-//	}
 	if(!Renderer::forceDisableNativeDrawing)
 		return origRedrawFrontendBitmap(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+	return 0;
 }
 
 
-float rot = 0;
 void Drawing::callDrawBitmapOnBitmap(Bitmap::BitmapImage *Dst, int posX, int posY, int width, int height, Bitmap::BitmapImage *Src, int srcOffsetX, int srcOffsetY, int a9, int flags) {
 	_asm push flags
 	_asm push a9
@@ -73,13 +69,47 @@ int __stdcall Drawing::hookDrawBitmapOnBitmap(int posX, int posY, int width, int
 	int retv;
 	_asm mov Dst, esi
 
+	// Until custom GL is live, do not touch draw semantics — pure native trampoline.
+	// (Previously default drawToScreen=true + early returns could drop non-landscape blits.)
+	if(!Renderer::isActive()) {
+		Renderer::tryLateInitGL();
+		if(!Renderer::isActive()) {
+			// #region agent log
+			{
+				static unsigned int n = 0;
+				n++;
+				if(n <= 8) {
+					char data[128];
+					sprintf_s(data, "{\"n\":%u,\"depth\":%d,\"dstNull\":%d}",
+						n, Src ? Src->bitdepth_dwordC : -1, Dst ? 0 : 1);
+					agentDebugLog("H12", "Drawing.cpp:hookDrawBitmapOnBitmap", "pure_native", data);
+				}
+			}
+			// #endregion
+			_asm mov esi, Dst
+			_asm push flags
+			_asm push a9
+			_asm push srcOffsetY
+			_asm push srcOffsetX
+			_asm push Src
+			_asm push height
+			_asm push width
+			_asm push posY
+			_asm push posX
+			_asm call origDrawBitmapOnBitmap
+			_asm mov retv, eax
+			return retv;
+		}
+	}
+
 	bool drawToScreen = true;
+	bool didGlDraw = false;
 	ExtendedBitmap * srcExtension = nullptr, * dstExtension = nullptr;
-	if(Config::rendererEnabled && Renderer::glewInitialized && Renderer::glContextCreated) {
+	if(Renderer::isActive() && Renderer::ensureGLContext()) {
 		auto dddisplay = Game::getAddrDdDisplay();
 		drawToScreen = (!Dst || (dddisplay && ((DWORD) Dst == *(DWORD *) (dddisplay + 0x3D9C))));
 
-		if (Src->bitdepth_dwordC == 8 && (drawToScreen || (Dst && Dst->bitdepth_dwordC == 8))) {
+		if (Src && Src->bitdepth_dwordC == 8 && (drawToScreen || (Dst && Dst->bitdepth_dwordC == 8))) {
 
 			srcExtension = BitmapExtension::findBitmapExtension(Src);
 			if (!srcExtension) {
@@ -88,7 +118,6 @@ int __stdcall Drawing::hookDrawBitmapOnBitmap(int posX, int posY, int width, int
 			}
 			if (!srcExtension->populated) {
 				printf("hookDrawBitmapOnBitmap: populating Src BitmapExtension: %X %dx%d (rowsize: %d, depth: %d)\n", Src, Src->max_width_dword14, Src->max_height_dword18, Src->rowsize_dword10, Src->bitdepth_dwordC);
-//				auto data = BitmapExtension::convertBitmapImageToGLRGBA(Src, nullptr, (ScreenPalette*)Renderer::addrScreenPalette);
 				auto data = (unsigned char *) Src->data_dword8;
 				BitmapExtension::populateBitmapImageExtension(Src, data);
 			}
@@ -105,13 +134,12 @@ int __stdcall Drawing::hookDrawBitmapOnBitmap(int posX, int posY, int width, int
 				}
 				if (!dstExtension->populated) {
 					printf("hookDrawBitmapOnBitmap: populating Dst BitmapExtension: %X %dx%d (rowsize: %d, depth: %d)\n", Dst, Dst->max_width_dword14, Dst->max_height_dword18, Dst->rowsize_dword10, Dst->bitdepth_dwordC);
-//					auto data = BitmapExtension::convertBitmapImageToGLRGBA(Dst, nullptr, (ScreenPalette*)Renderer::addrScreenPalette);
 					auto data = (unsigned char *) Dst->data_dword8;
 					BitmapExtension::populateBitmapImageExtension(Dst, data);
 				}
 			}
 
-			GLint dstBuffer, srcTexture;
+			GLuint dstBuffer;
 			int dstWidth, dstHeight;
 
 			int srcWidth = Src->max_width_dword14;
@@ -125,7 +153,7 @@ int __stdcall Drawing::hookDrawBitmapOnBitmap(int posX, int posY, int width, int
 				glOffsetY += srcExtension->spriteFrames[Src->data_dword8] * srcExtension->spriteMaxH;
 				srcHeight = srcExtension->spriteMaxH * srcExtension->sprite->max_frames_word16;
 			}
-			srcTexture = srcExtension->texture;
+			GLuint srcTexture = srcExtension->texture;
 			if (drawToScreen) {
 				dstWidth = Renderer::screenWidth;
 				dstHeight = Renderer::screenHeight;
@@ -136,104 +164,78 @@ int __stdcall Drawing::hookDrawBitmapOnBitmap(int posX, int posY, int width, int
 				dstHeight = Dst->current_height_dword28;
 			}
 
-			glDisable(GL_DEPTH_TEST);
-			glBindFramebuffer(GL_FRAMEBUFFER, dstBuffer);
-
-			glMatrixMode(GL_PROJECTION);
-			glPushMatrix();
-			glLoadIdentity();
-
-			glPushAttrib(GL_VIEWPORT_BIT);
-			glViewport(0, 0, dstWidth, dstHeight);
-			if (drawToScreen)
-				glOrtho(0, dstWidth, dstHeight, 0, -1, 1);
-			else
-				glOrtho(0, dstWidth, 0, dstHeight, -1, 1);
-
 			GLfloat startx = (float) glOffsetX / (float) srcWidth;
 			GLfloat starty = (float) glOffsetY / (float) srcHeight;
 			GLfloat endx = (float) (glOffsetX + width) / (float) srcWidth;
 			GLfloat endy = (float) (glOffsetY + height) / (float) srcHeight;
 
-			int sPosX = posX;
-			int sPosY = posY;
+			GLDraw::drawIndexedQuad(
+				dstBuffer, dstWidth, dstHeight,
+				srcTexture,
+				posX, posY, glWidth, glHeight,
+				startx, starty, endx, endy,
+				drawToScreen,
+				(flags & 0x1) != 0,
+				(flags & 0x10000) != 0,
+				(GLuint)paletteShaderProgram, (GLuint)indexedShaderProgram,
+				palette_IndexedTextureSamplerLocation, palette_PaletteTextureSamplerLocation, palette_TransparentFlagLocation,
+				indexed_TextureSamplerLocation,
+				palette_texture,
+				Config::rendererDebugPoints != 0
+			);
+			didGlDraw = true;
 
-//			int srcWidth2 = Src->current_width_dword24;
-//			int srcHeight2 = Src->current_height_dword28;
-//			glTranslatef(sPosX + srcWidth2/2, sPosY + srcHeight2/2, 0);
-//			glRotatef(Renderer::rot, 0, 0, 1);
-//			glTranslatef(-sPosX - srcWidth2/2, -sPosY - srcHeight2/2, 0);
-
-			glEnable(GL_TEXTURE_2D);
-			if (flags & 0x1) {
-				glEnable(GL_BLEND);
-				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-				glBlendEquation(GL_FUNC_ADD);
+			// #region agent log
+			{
+				static unsigned int n = 0;
+				n++;
+				if(n <= 8) {
+					char data[256];
+					sprintf_s(data,
+						"{\"n\":%u,\"screen\":%d,\"palTex\":%u,\"srcTex\":%u,\"w\":%d,\"h\":%d,\"depth\":%d}",
+						n, (int)drawToScreen, (unsigned)palette_texture, (unsigned)srcTexture,
+						width, height, Src->bitdepth_dwordC);
+					agentDebugLog(drawToScreen ? "H4" : "H1", "Drawing.cpp:hookDrawBitmapOnBitmap", "gl_draw", data);
+				}
 			}
-
-			GLint whichID;
-			glActiveTexture(GL_TEXTURE0);
-			glGetIntegerv(GL_TEXTURE_BINDING_2D, &whichID);
-			glBindTexture(GL_TEXTURE_2D, srcTexture);
-
-			if (flags & 0x10000) { // flip horizontal
-				int tmp = startx;
-				startx = endx;
-				endx = tmp;
-			}
-
-			if(drawToScreen) {
-				glUseProgram(paletteShaderProgram);
-				glActiveTexture(GL_TEXTURE1);
-				glBindTexture(GL_TEXTURE_1D, palette_texture);
-
-				glUniform1i(palette_IndexedTextureSamplerLocation, 0);
-				glUniform1i(palette_PaletteTextureSamplerLocation, 1);
-				glUniform1i(palette_TransparentFlagLocation, (int)(flags & 0x1) != 0);
-
-				glActiveTexture(GL_TEXTURE0);
-			} else {
-				glUseProgram(indexedShaderProgram);
-			}
-			glBegin(GL_QUADS);
-			glTexCoord2f(startx, starty);
-			glVertex2i(sPosX, sPosY);
-			glTexCoord2f(endx, starty);
-			glVertex2i(sPosX + glWidth, sPosY);
-			glTexCoord2f(endx, endy);
-			glVertex2i(sPosX + glWidth, sPosY + glHeight);
-			glTexCoord2f(startx, endy);
-			glVertex2i(sPosX, sPosY + glHeight);
-			glEnd();
-
-
-			glBindTexture(GL_TEXTURE_2D, whichID);
-			glDisable(GL_TEXTURE_2D);
-			if (Config::rendererDebugPoints) {
-				glPointSize(8.0f);
-				glBegin(GL_POINTS);
-				glColor3f(1.0f, 0.0f, 0.0f);
-				glVertex2i(0, 0);
-				glColor3f(0.0f, 1.0f, 0.0f);
-				glVertex2i(sPosX, sPosY);
-				glColor3f(0.0f, 1.0f, 1.0f);
-				glVertex2i(sPosX + width, sPosY + height);
-				glEnd();
-				glColor3f(1.0f, 1.0f, 1.0f);
-			}
-			if (flags & 0x1) {
-				glDisable(GL_BLEND);
-			}
-
-
-			glPopMatrix();
-			glPopAttrib();
-			glBindFramebuffer(GL_FRAMEBUFFER, 0);
-			glUseProgram(0);
+			// #endregion
 		}
 	}
-	if(!Dst) return 0;
-	if(Config::rendererEnabled && drawToScreen) return 0;
+	if(!Dst) {
+		// #region agent log
+		if(!didGlDraw) {
+			static unsigned int nullDstN = 0;
+			nullDstN++;
+			if(nullDstN <= 8) {
+				char data[128];
+				sprintf_s(data, "{\"n\":%u,\"didGl\":0,\"active\":%d}", nullDstN, (int)Renderer::isActive());
+				agentDebugLog("H8", "Drawing.cpp:hookDrawBitmapOnBitmap", "null_dst_try_native", data);
+			}
+		}
+		// #endregion
+		// Only skip native when GL already drew to the default framebuffer.
+		if(didGlDraw)
+			return 0;
+	}
+	// Only skip native screen blit when GL actually drew. Otherwise frontend/DD path
+	// would get a blank frame (rendererEnabled but no OpenGLInit/context yet).
+	if(Config::rendererEnabled && drawToScreen && didGlDraw) {
+		return 0;
+	}
+	// #region agent log
+	if(Config::rendererEnabled && drawToScreen && !didGlDraw) {
+		static unsigned int skipN = 0;
+		skipN++;
+		if(skipN <= 10) {
+			char data[192];
+			int depth = Src ? Src->bitdepth_dwordC : -1;
+			sprintf_s(data, "{\"n\":%u,\"didGl\":0,\"depth\":%d,\"active\":%d,\"fallbackNative\":1}",
+				skipN, depth, (int)Renderer::isActive());
+			agentDebugLog("H6", "Drawing.cpp:hookDrawBitmapOnBitmap", "inactive_or_no_gl_native", data);
+		}
+	}
+	// #endregion
+
 
 
 	_asm mov esi, Dst
@@ -257,9 +259,19 @@ int __stdcall Drawing::hookDrawBitmapOnBitmap(int posX, int posY, int width, int
 }
 
 
-void Drawing::compileShaders() {
+bool Drawing::compileShaders() {
 	try {
-//		glEnableClientState(GL_VERTEX_ARRAY);
+		if(!Config::rendererEnabled || !Renderer::glContextCreated || !Renderer::glewInitialized || !wglGetCurrentContext()) {
+			printf("compileShaders: no GL context\n");
+			return false;
+		}
+
+		const GLubyte * glVersion = glGetString(GL_VERSION);
+		const GLubyte * glslVersion = glGetString(GL_SHADING_LANGUAGE_VERSION);
+		printf("compileShaders: GL_VERSION=%s GLSL=%s\n",
+			   glVersion ? (const char*)glVersion : "?",
+			   glslVersion ? (const char*)glslVersion : "?");
+
 		unsigned int vertex, fragment;
 		int success;
 		char infoLog[512];
@@ -292,7 +304,6 @@ void Drawing::compileShaders() {
 		if (!success) {
 			glGetProgramInfoLog(ID, sizeof(infoLog), NULL, infoLog);
 			throw std::runtime_error("Failed to link shader program, reason:\n" + std::string(infoLog));
-			return;
 		}
 
 		glDeleteShader(fragment);
@@ -319,7 +330,6 @@ void Drawing::compileShaders() {
 		if (!success) {
 			glGetProgramInfoLog(ID, sizeof(infoLog), NULL, infoLog);
 			throw std::runtime_error("Failed to link shader program (palette), reason:\n" + std::string(infoLog));
-			return;
 		}
 		glDeleteShader(vertex);
 		glDeleteShader(fragment);
@@ -329,27 +339,30 @@ void Drawing::compileShaders() {
 		palette_PaletteTextureSamplerLocation = glGetUniformLocation(paletteShaderProgram, "palette_text");
 		palette_TransparentFlagLocation = glGetUniformLocation(paletteShaderProgram, "transparent_flag");
 
+		printf("compileShaders: indexed program=%d palette program=%d\n", indexedShaderProgram, paletteShaderProgram);
+		return true;
 	}
 	catch(std::exception & e) {
+		printf("compileShaders failed: %s\n", e.what());
 		MessageBoxA(0, e.what(), "Failed to compile shader", 0);
+		return false;
 	}
 }
 
 void Drawing::genPaletteTexture(DWORD palette) {
+	if(!Renderer::ensureGLContext())
+		return;
+
 	auto screenpal = (ScreenPalette *) palette;
 	static auto data = (DWORD*)malloc(sizeof(DWORD) * 256);
-
-//	palette = 0;
 
 	if(!palette) {
 		for(int i=0; i < 256; i++) {
 			data[i] = 0xFF000000 | (rand() & 0xFF) << 16 | (rand() & 0xFF) << 8 | (rand() & 0xFF);
-//			printf("Color (rand): %d = 0x%08X\n", i, data[i]);
 		}
 	} else {
 		for(int i=0; i < 256; i++) {
 			data[i] = screenpal->colors[i].toRGBA();
-//			printf("Color (screen): %d = 0x%08X\n", i, data[i]);
 		}
 	}
 
@@ -362,24 +375,33 @@ void Drawing::genPaletteTexture(DWORD palette) {
 
 	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 
-
-	glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA32F, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA8, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 	glBindTexture(GL_TEXTURE_1D, oldbind);
 }
 
 
-//WPalette *__thiscall SWITCH_PALETTE_hooked_by_indimask_sub_56A1A0(DD_Display *this, WPalette *a2, int commit_a3)
 DWORD (__fastcall *origSwitchScreenPalette)(DWORD This, int EDX, DWORD palette, int commit);
 DWORD __fastcall Drawing::hookSwitchScreenPalette(DWORD This, int EDX, DWORD palette, int commit) {
 	auto ret = origSwitchScreenPalette(This, EDX, palette, commit);
-//	if(Config::rendererEnabled) {
-//		genPaletteTexture(palette);
-//	}
+	if(Config::rendererEnabled && Renderer::ensureGLContext()) {
+		genPaletteTexture(palette);
+	}
 	return ret;
 }
 
 int Drawing::install(SignatureScanner &, module) {
+	if(!Config::rendererEnabled || !Config::rendererSkipNativeBlit) {
+		printf("Drawing::install: custom draw overrides disabled (Enable=%d SkipNativeBlit=%d)\n",
+			Config::rendererEnabled, Config::rendererSkipNativeBlit);
+		// #region agent log
+		agentDebugLog("H19", "Drawing.cpp:install", "skip_draw_hooks_safe_mode",
+			Config::rendererEnabled ? "{\"SkipNativeBlit\":0}" : "{\"EnableCustomRenderer\":0}");
+		// #endregion
+		return 0;
+	}
+
 	DWORD addrDrawLandscape = Hooks::scanPattern("DrawLandscape", "\x55\x8B\xEC\x83\xE4\xF8\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x64\x89\x25\x00\x00\x00\x00\x83\xEC\x30\x53\x56\x57\x8B\xD9\x8B\x4D\x08\x8B\xFA", "??????xxx????xx????xxxx????xxxxxxxxxxxxx", 0x5A2790);
 	DWORD addrDrawBitmapOnBitmap = Hooks::scanPattern("DrawBitmapOnBitmap", "\x55\x8B\xEC\x83\xE4\xF8\x8B\x4D\x10\x8B\x45\x18\x83\xEC\x38\x85\xC9\x53\x57\x0F\x84\x00\x00\x00\x00\x83\x7D\x14\x00\x0F\x84\x00\x00\x00\x00\x8B\x50\x08\x8B\x78\x10\x8B\x46\x20\x8B\x5E\x1C", "??????xxxxxxxxxxxxxxx????xxxxxx????xxxxxxxxxxxx", 0x4F6910);
 	DWORD addrRedrawFrontendBitmap = Renderer::addrBitmapDescriptorVTable[11]; //5A0BD0

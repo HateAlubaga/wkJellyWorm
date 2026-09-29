@@ -4,6 +4,7 @@
 #include <sol/forward.hpp>
 #include <memory>
 #include <map>
+#include <string>
 
 
 class Lua {
@@ -20,6 +21,11 @@ public:
 	sol::state *getState() const;
 
 	std::shared_ptr<sol::environment> spawnEnv(std::string path);
+
+	std::string evalRepl(const std::string &code);
+
+	// Dump globals (functions + usertypes) to jelly/api.txt; returns count of entries written
+	int dumpApiToFile(const std::string &path = "jelly\\api.txt");
 
 	static void onConstructGlobalContext(int a1);
 };

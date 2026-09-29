@@ -83,6 +83,30 @@ CTaskMissile* Weapons::callCreateWeaponProjectile(CGameTask * This, WeaponProjec
 	return hookCreateWeaponProjectile(This, 0, projectileParams, launchParams);
 }
 
+sol::object Weapons::createWeaponProjectileLua(sol::object paramsObj, sol::optional<sol::object> launchObj) {
+	if(!paramsObj.is<WeaponProjectileParams>()) {
+		printf("createWeaponProjectile: expected a WeaponProjectileParams (got %s); ignoring\n",
+			sol::type_name(paramsObj.lua_state(), paramsObj.get_type()).c_str());
+		return sol::lua_nil;
+	}
+	DWORD addrTurnGame = Game::getAddrTurnGameObject();
+	if(!addrTurnGame) {
+		// No active match: package code building/firing a projectile from
+		// top-level module code has no worm/turn to attach it to.
+		return sol::lua_nil;
+	}
+	WeaponProjectileParams params = paramsObj.as<WeaponProjectileParams>();
+	WeaponLaunchParams launch{};
+	WeaponLaunchParams * launchPtr = nullptr;
+	if(launchObj && launchObj->is<WeaponLaunchParams>()) {
+		launch = launchObj->as<WeaponLaunchParams>();
+		launchPtr = &launch;
+	}
+	CTaskMissile * result = callCreateWeaponProjectile(reinterpret_cast<CGameTask *>(addrTurnGame), &params, launchPtr);
+	if(!result) return sol::lua_nil;
+	return sol::make_object(paramsObj.lua_state(), result);
+}
+
 int Weapons::install(SignatureScanner &, module) {
 	DWORD addrWeaponRelease = Hooks::scanPattern("WeaponRelease", "\x81\xEC\x00\x00\x00\x00\x53\x8B\x9C\x24\x00\x00\x00\x00\x55\x8B\xAC\x24\x00\x00\x00\x00\x56\x57\x6A\x2C\x8B\xF8\x33\xF6\x8D\x44\x24\x18\x56\x50\xE8\x00\x00\x00\x00\x8B\x8F\x00\x00\x00\x00\x83\xC4\x0C", "??????xxxx????xxxx????xxxxxxxxxxxxxxx????xx????xxx", 0x51C3D0);
 	DWORD addrWormStartFiringWeapon = Hooks::scanPattern("WormStartFiringWeapon", "\x81\xEC\x00\x00\x00\x00\x53\x55\x56\x8B\xF0\x8B\x46\x44\x57\x8B\xBE\x00\x00\x00\x00\x33\xDB\x83\xE8\x6E", "??????xxxxxxxxxxx????xxxxx", 0x51B7F0);
@@ -96,9 +120,15 @@ int Weapons::install(SignatureScanner &, module) {
 
 
 	auto * lua = Lua::getInstance().getState();
-	lua->set_function("createWeaponProjectile", &callCreateWeaponProjectile);
+	lua->set_function("createWeaponProjectile", &createWeaponProjectileLua);
 
-	sol::usertype <WeaponLaunchParams> ut = lua->new_usertype <WeaponLaunchParams> ("WeaponLaunchParams");
+	// See the matching comment on WeaponStruct's usertype (CustomWeapons.cpp):
+	// ported packages address struct fields by byte offsets that don't match
+	// this usertype's DWORD-aligned bindings. Ignore unknown writes/reads
+	// instead of hard-erroring the whole package load.
+	sol::usertype <WeaponLaunchParams> ut = lua->new_usertype <WeaponLaunchParams> ("WeaponLaunchParams",
+		sol::meta_function::new_index, [](WeaponLaunchParams &, std::string, sol::object) {},
+		sol::meta_function::index, [](WeaponLaunchParams &, std::string) -> sol::object { return sol::lua_nil; });
 	ut["unknown0"] = &WeaponLaunchParams::unknown0;
 	ut["unknown4"] = &WeaponLaunchParams::unknown4;
 	ut["unknown8"] = &WeaponLaunchParams::unknown8;
@@ -112,7 +142,9 @@ int Weapons::install(SignatureScanner &, module) {
 	ut["unknown28"] = &WeaponLaunchParams::unknown28;
 
 
-	sol::usertype <WeaponProjectileParams> ut2 = lua->new_usertype <WeaponProjectileParams> ("WeaponProjectileParams");
+	sol::usertype <WeaponProjectileParams> ut2 = lua->new_usertype <WeaponProjectileParams> ("WeaponProjectileParams",
+		sol::meta_function::new_index, [](WeaponProjectileParams &, std::string, sol::object) {},
+		sol::meta_function::index, [](WeaponProjectileParams &, std::string) -> sol::object { return sol::lua_nil; });
 	ut2["unknown0"] = &WeaponProjectileParams::unknown0;
 	ut2["unknown4"] = &WeaponProjectileParams::unknown4;
 	ut2["unknown8"] = &WeaponProjectileParams::unknown8;

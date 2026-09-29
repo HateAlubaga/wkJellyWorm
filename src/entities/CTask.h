@@ -4,6 +4,7 @@
 
 #include <sigscanner.h>
 #include "../Constants.h"
+#include "../Utils.h"
 #include "CList.h"
 #include <functional>
 
@@ -32,7 +33,9 @@ public:
 		static const size_t vtNum = 7;
 
 		inline static std::vector<t_vt0> vtable0_callbacks;
+		inline static std::vector<t_vt0> vtable0_builtin_callbacks;
 		inline static std::vector<t_vt4> vtable4_callbacks;
+		inline static std::vector<t_vt4> vtable4_builtin_callbacks;
 		inline static std::vector<t_vt8> vtable8_callbacks;
 		inline static std::vector<t_vt8> vtable8_builtin_callbacks;
 		inline static std::vector<t_vtC> vtableC_callbacks;
@@ -43,7 +46,9 @@ public:
 		inline static std::array<DWORD, vtNum> vtable_original;
 
 		static void registerCallbackVt0(t_vt0 cb) {vtable0_callbacks.push_back(cb);}
+		static void registerBuiltinCallbackVt0(t_vt0 cb) {vtable0_builtin_callbacks.push_back(cb);}
 		static void registerCallbackVt4(t_vt4 cb) {vtable4_callbacks.push_back(cb);}
+		static void registerBuiltinCallbackVt4(t_vt4 cb) {vtable4_builtin_callbacks.push_back(cb);}
 		static void registerCallbackVt8(t_vt8 cb) {vtable8_callbacks.push_back(cb);}
 		static void registerBuiltinCallbackVt8(t_vt8 cb) {vtable8_builtin_callbacks.push_back(cb);}
 		static void registerCallbackVtC(t_vtC cb) {vtableC_callbacks.push_back(cb);}
@@ -63,11 +68,14 @@ public:
 
 		static int __fastcall hookVtable0(T * This, int EDX, int a2) {
 			int ret = 0;
+			for(auto & cb : vtable0_builtin_callbacks) {
+				ret |= cb(This, a2);
+			}
 			for(auto & cb : vtable0_callbacks) {
 				try {
 					ret |= cb(This, a2);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CTask vt0", e.what());
 				}
 			}
 			if(!ret) {
@@ -78,11 +86,14 @@ public:
 		}
 		static int __fastcall hookVtable4(T * This, int EDX, int heap) {
 			int ret = 0;
+			for(auto & cb : vtable4_builtin_callbacks) {
+				ret |= cb(This, heap);
+			}
 			for(auto & cb : vtable4_callbacks) {
 				try {
 					ret |= cb(This, heap);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CTask vt4", e.what());
 				}
 			}
 			if(!ret) {
@@ -100,7 +111,7 @@ public:
 				try {
 					ret |= cb(This, sender, mtype, size, data);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CTask vt8", e.what());
 				}
 			}
 			if(!ret) {
@@ -115,7 +126,7 @@ public:
 				try {
 					ret |= cb(This, a2, a3, a4);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CTask vtC", e.what());
 				}
 			}
 			if(!ret) {
@@ -130,7 +141,7 @@ public:
 				try {
 					ret |= cb(This, a2, a3, a4);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CTask vt10", e.what());
 				}
 			}
 			if(!ret) {
@@ -145,7 +156,7 @@ public:
 				try {
 					ret |= cb(This, a2);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CTask vt14", e.what());
 				}
 			}
 			if(!ret) {
@@ -160,7 +171,7 @@ public:
 				try {
 					ret |= cb(This);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CTask vt18", e.what());
 				}
 			}
 			if(!ret) {

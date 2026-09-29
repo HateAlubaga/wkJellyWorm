@@ -48,6 +48,7 @@ int __fastcall hookWriteLandMaskID(DWORD This, int EDX, int maskid, int posX, in
 
 int Landscape::callWriteLandMaskID(int maskid, int posX, int posY) {
 	DWORD addrPCLandscape = Game::getAddrPCLandscape();
+	if(!addrPCLandscape) return 0; // no active match: packages call this from top-level module code
 	return hookWriteLandMaskID(addrPCLandscape, 0, maskid, posX, posY);
 }
 
@@ -62,6 +63,7 @@ void __fastcall hookWriteLandRadius(DWORD This, int EDX, int radius, int posX, i
 
 void Landscape::callWriteLandRadius(int radius, int posX, int posY) {
 	DWORD addrPCLandscape = Game::getAddrPCLandscape();
+	if(!addrPCLandscape) return; // no active match: packages call this from top-level module code
 	hookWriteLandRadius(addrPCLandscape, 0, radius, posX, posY);
 }
 
@@ -89,6 +91,7 @@ int __stdcall hookWriteLandRaw(int posX, int posY, int layer) {
 
 int Landscape::callWriteLandRaw(DWORD bitmap, int posX, int posY, int layer) {
 	DWORD addrPCLandscape = Game::getAddrPCLandscape();
+	if(!addrPCLandscape) return 0; // no active match: packages call this from top-level module code
 	int retv;
 	_asm mov ecx, bitmap
 	_asm mov edi, addrPCLandscape

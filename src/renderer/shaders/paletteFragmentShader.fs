@@ -11,7 +11,8 @@ void main() {
 		gl_FragColor = vec4(0,0,0,0);
 	}
 	else {
-		vec4 palette_color = texture(palette_text, float(palette_index) / 256.);
+		// Sample texel centers: index 0 -> 0.5/256, index 255 -> 255.5/256
+		vec4 palette_color = texture(palette_text, (float(palette_index) + 0.5) / 256.0);
 		gl_FragColor = vec4(palette_color.rgb, 1);
 	}
 }

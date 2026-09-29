@@ -3,6 +3,22 @@ project(wkJellyWorm)
 
 set(CMAKE_CXX_STANDARD 17)
 
+set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC ON CACHE BOOL "" FORCE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/libxmp/CMakeLists.txt")
+    add_subdirectory(lib/libxmp)
+    if(TARGET xmp_static)
+        set_property(TARGET xmp_static PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+else()
+    include(FetchContent)
+    FetchContent_Declare(
+            libxmp
+            GIT_REPOSITORY https://github.com/libxmp/libxmp.git
+            GIT_TAG libxmp-4.6.2
+    )
+    FetchContent_MakeAvailable(libxmp)
+endif()
 
 set(PRE_CONFIGURE_FILE "cmake/git.cc.in")
 set(POST_CONFIGURE_FILE "${CMAKE_CURRENT_BINARY_DIR}/git.cc")
@@ -30,8 +46,10 @@ add_library(wkJellyWorm SHARED
         src/Constants.h
         src/entities/Entities.h
         src/Lobby.cpp src/Lobby.h
+        src/LobbyGui.cpp src/LobbyGui.h
         src/Config.cpp src/Config.h
         src/Game.cpp src/Game.h
+        src/Input.cpp src/Input.h
         src/Chat.cpp src/Chat.h
         src/Landscape.cpp src/Landscape.h
 
@@ -73,13 +91,20 @@ add_library(wkJellyWorm SHARED
         src/entities/gametasks/CTaskOldWorm.cpp src/entities/gametasks/CTaskOldWorm.h
 
         src/Sounds.cpp src/Sounds.h
+        src/Music.cpp src/Music.h
         src/Sprites.cpp src/Sprites.h
         src/WaLibc.cpp src/WaLibc.h
         src/Explosions.cpp src/Explosions.h
         src/Weapons.cpp src/Weapons.h
         src/renderer/Bitmap.cpp src/renderer/Bitmap.h
         src/renderer/Renderer.cpp src/renderer/Renderer.h
-        src/renderer/Palette.cpp src/renderer/Palette.h src/renderer/BitmapExtension.cpp src/renderer/BitmapExtension.h src/renderer/Drawing.cpp src/renderer/Drawing.h)
+        src/renderer/Palette.cpp src/renderer/Palette.h src/renderer/BitmapExtension.cpp src/renderer/BitmapExtension.h src/renderer/Drawing.cpp src/renderer/Drawing.h
+        src/renderer/GLDraw.cpp src/renderer/GLDraw.h
+        src/FrameScheduler.cpp src/FrameScheduler.h
+        src/Hud.cpp src/Hud.h
+        src/MemAccess.cpp src/MemAccess.h
+        src/CrashReporter.cpp src/CrashReporter.h
+        src/JellyRNG.cpp src/JellyRNG.h)
 
 set_property(TARGET wkJellyWorm git hacklib PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-target_link_libraries(wkJellyWorm hacklib libMinHook-x86-v141-mt git lua53 glew32s glu32 opengl32 capstone Polyhook_2)
+target_link_libraries(wkJellyWorm hacklib libMinHook-x86-v141-mt git lua53 glew32s glu32 opengl32 capstone Polyhook_2 xmp_static winmm winhttp Dbghelp)

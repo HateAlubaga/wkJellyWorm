@@ -23,7 +23,6 @@ private:
 #include "shaders/paletteFragmentShader.fs"
 	;
 
-	static void compileShaders();
 	static inline GLint indexedShaderProgram, paletteShaderProgram;
 	static inline GLint indexed_TextureSamplerLocation;
 	static inline GLint palette_IndexedTextureSamplerLocation, palette_PaletteTextureSamplerLocation, palette_TransparentFlagLocation;
@@ -31,14 +30,16 @@ private:
 	static inline GLuint palette_PaletteTextureSampler = 0;
 
 	static DWORD __fastcall hookRedrawFrontendBitmap(Renderer::BitmapDescriptor * a1, DWORD a2, int a3, int a4, Renderer::BitmapDescriptor *  a5, int a6, int a7, int a8, int a9, int a10);
-	static DWORD __fastcall Drawing::hookSwitchScreenPalette(DWORD This, int EDX, DWORD palette, int commit);
+	static DWORD __fastcall hookSwitchScreenPalette(DWORD This, int EDX, DWORD palette, int commit);
 
-	static void genPaletteTexture(DWORD palette);
 public:
+	static bool compileShaders();
+	static void genPaletteTexture(DWORD palette);
 	static void callDrawBitmapOnBitmap(Bitmap::BitmapImage * Dst, int posX, int posY, int width, int height, Bitmap::BitmapImage *Src, int srcOffsetX, int srcOffsetY, int a9, int flags);
 	static int install(SignatureScanner &, module);
 
 	friend class Renderer;
+	friend class GLDraw;
 };
 
 

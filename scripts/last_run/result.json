@@ -1,0 +1,30 @@
+﻿{
+    "ok":  false,
+    "crashed":  false,
+    "crashHint":  null,
+    "waExitedEarly":  false,
+    "logExists":  true,
+    "logBytes":  173,
+    "avgLuma":  35.26,
+    "darkPct":  80.2,
+    "likelyBlackScreen":  false,
+    "counts":  {
+                   "before_orig":  0,
+                   "after_orig":  0,
+                   "glew_ok":  0,
+                   "defer_glew":  0,
+                   "shaders_and_palette_ready":  0,
+                   "skip_native_mark_ready":  0,
+                   "native_passthrough":  0,
+                   "present":  0,
+                   "gl_draw":  0,
+                   "cleared":  0,
+                   "pure_native":  0,
+                   "disabled":  0
+               },
+    "hypothesisHits":  {
+                           "H19":  1
+                       },
+    "screenshot":  "C:\\Users\\Admin\\Projects\\worms-modding-lab\\sources\\wkJellyWorm\\scripts\\last_run\\screenshot.png",
+    "seconds":  20
+}

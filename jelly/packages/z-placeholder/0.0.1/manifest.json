@@ -1,0 +1,12 @@
+{
+  "name": "z-placeholder",
+  "description": "Converted from PX library z-placeholder.pxl",
+  "version": "0.0.1",
+  "author": "px2jelly",
+  "scripts": [
+    "main.lua"
+  ],
+  "sprites": [],
+  "imgs": [],
+  "dependencies": []
+}

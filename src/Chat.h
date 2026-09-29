@@ -11,6 +11,9 @@ private:
 public:
 	static int onChatInput(int a1, char * msg, int a3);
 	static void callShowChatMessage(std::string msg, int color);
+	static bool sendSyncChat(const std::string &payload);
+	static bool isIncomingSyncChat();
+	static int getIncomingSyncGen();
 	static int install(SignatureScanner &, module);
 };
 

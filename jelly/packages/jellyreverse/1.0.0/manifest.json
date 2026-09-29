@@ -1,0 +1,15 @@
+{
+  "name": "jellyreverse",
+  "description": "Reverse-velocity + rope-flight state + weapon delay regen (real wkJellyWorm API)",
+  "version": "1.0.0",
+  "author": "you",
+  "scripts": [
+    "main.lua"
+  ],
+  "sprites": [],
+  "imgs": [],
+  "dependencies": [],
+  "chatCommands": ["rev", "jr", "reversal", "reverse"],
+  "minJellyVersion": "1.2.0",
+  "capabilities": []
+}

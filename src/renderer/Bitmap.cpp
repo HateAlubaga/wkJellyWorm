@@ -1,12 +1,19 @@
-#include "Bitmap.h"
+﻿#include "Bitmap.h"
 #include "../Hooks.h"
 #include "../Game.h"
+#include "../MemAccess.h"
 #include "../Lua.h"
 #include <sol/sol.hpp>
 #include "../Config.h"
 #include "../WaLibc.h"
 #include "Renderer.h"
 #include "Palette.h"
+#include <stb_image.h>
+#include <algorithm>
+#include <cctype>
+#include <cstring>
+#include <string>
+#include <Windows.h>
 
 DWORD origConstructBitmapImage;
 
@@ -24,7 +31,7 @@ Bitmap::BitmapImage * __stdcall hookConstructBitmapImage(int width) {
 	_asm call origConstructBitmapImage
 	_asm mov retv, eax
 
-	if(Config::rendererEnabled && This->bitdepth_dwordC == 8) {
+	if(Config::rendererEnabled && This->bitdepth_dwordC == 8 && Renderer::isActive()) {
 		BitmapExtension::constructBitmapImageExtension(This);
 	}
 
@@ -34,7 +41,7 @@ Bitmap::BitmapImage * __stdcall hookConstructBitmapImage(int width) {
 DWORD (__fastcall *origDestroyBitmapImage)(Bitmap::BitmapImage * This, int EDX, char a2);
 DWORD __fastcall hookDestroyBitmapImage(Bitmap::BitmapImage * This, int EDX, char a2) {
 //	if(a2) Renderer::onDestroyBitmapImage(This);
-	if(Config::rendererEnabled && This->bitdepth_dwordC == 8) {
+	if(Config::rendererEnabled && This->bitdepth_dwordC == 8 && Renderer::isActive()) {
 		BitmapExtension::destroyBitmapImageExtension(This);
 	}
 	return origDestroyBitmapImage(This, EDX, a2);
@@ -60,7 +67,9 @@ int __fastcall hookDrawBitmapGlobal(DWORD gamescene, int posY, int a3, int posX,
 }
 
 void Bitmap::callDrawBitmapGlobal(int posY, int a3, int posX, Bitmap::BitmapImage *bitmap, int a6, int a7, int a8, int a9) {
-	int gamescene = *(DWORD*)(Game::getAddrGameGlobal() + 0x524);
+	int gamescene = (int)Game::getAddrGameScene();
+	if(!gamescene)
+		return;
 	hookDrawBitmapGlobal(gamescene, posY, a3, posX, bitmap, a6, a7, a8, a9);
 }
 
@@ -70,12 +79,30 @@ int __fastcall hookDrawTextboxLocal(int *gamescene, int posY, int a3, int posX, 
 	return origDrawTextboxLocal(gamescene, posY, a3, posX, textbox, a6, a7, a8);
 }
 
+Bitmap::BitmapTextbox *Bitmap::callConstructTextbox(DWORD DDDisplay, BitmapTextbox *Dst, int length, int fontid) {
+	if(!origConstructTextbox || !DDDisplay || !Dst)
+		return Dst;
+	return origConstructTextbox(DDDisplay, 0, Dst, length, fontid);
+}
+
+int Bitmap::callSetTextboxText(BitmapTextbox *textbox, char *msg, int textcolor, int color1, int color2, int *a6, int *a7, int opacity) {
+	if(!origSetTextboxText || !textbox || !msg)
+		return 0;
+	return origSetTextboxText(textbox, msg, textcolor, color1, color2, a6, a7, opacity);
+}
+
+int Bitmap::callDrawTextboxLocal(int *gamescene, int posY, int a3, int posX, BitmapTextbox *textbox, int a6, int a7, int a8) {
+	if(!origDrawTextboxLocal || !gamescene || !textbox)
+		return 0;
+	return origDrawTextboxLocal(gamescene, posY, a3, posX, textbox, a6, a7, a8);
+}
+
 //(*(*a1_v8->dword14 + 36))(a1_v8->dword14, font_v29, msg_a2[v17], &v31, &v32)
 int (__fastcall *origDrawTextOnBitmap)(DWORD * DDDisplay, int EDX, int font, Bitmap::BitmapImage * bitmap, int horizontalAlign, int verticalAlign, char * msg, int *a7, int *a8);
 int __fastcall hookDrawTextOnBitmap(DWORD * DDDisplay, int EDX, int font, Bitmap::BitmapImage * bitmap, int horizontalAlign, int verticalAlign, char * msg, int* a7, int* a8) {
 //	printf("hookDrawTextOnBitmap: font: %d ha: %d va: %d msg: %s a7: %d a8: %d\n", font, horizontalAlign, verticalAlign, msg, a7, a8);
 	auto ret = origDrawTextOnBitmap(DDDisplay, EDX, font, bitmap, horizontalAlign, verticalAlign, msg, a7, a8);
-	if(Config::rendererEnabled) {
+	if(Config::rendererEnabled && Renderer::isActive()) {
 		auto extension = BitmapExtension::findBitmapExtension(bitmap);
 		if(extension)
 			extension->redraw = true;
@@ -85,18 +112,186 @@ int __fastcall hookDrawTextOnBitmap(DWORD * DDDisplay, int EDX, int font, Bitmap
 
 
 DWORD addrLoadImgFromFile;
-Bitmap::BitmapImage* Bitmap::callLoadImgFromFile(DWORD a1, int a2, char * path) {
-	if(!a1)
+static Bitmap::BitmapImage* callNativeLoadImgFromFile(DWORD a1, int a2, char * path) {
+	if(!a1 && Game::isValidDdGame())
 		a1 = *(DWORD*)(Game::getAddrDDGame() + 0x4C0); // dd display
-	if(!a2)
-		a2 = *(DWORD*)(Game::getAddrDdDisplay() + 0x3120); // img palette
-	BitmapImage* retv;
+	DWORD ddDisplay = Game::getAddrDdDisplay();
+	if(!a2 && ddDisplay && jellyProbeRead(ddDisplay + 0x3120, sizeof(DWORD)))
+		a2 = *(DWORD*)(ddDisplay + 0x3120); // img palette
+	Bitmap::BitmapImage* retv;
 	_asm mov esi, a1
 	_asm push path
 	_asm push a2
 	_asm call addrLoadImgFromFile
 	_asm mov retv, eax
 	return retv;
+}
+
+static bool hasPngExtension(const char *path) {
+	if(!path)
+		return false;
+	const char *dot = strrchr(path, '.');
+	if(!dot)
+		return false;
+	std::string extension(dot);
+	std::transform(extension.begin(), extension.end(), extension.begin(),
+		[](unsigned char c) { return (char)std::tolower(c); });
+	return extension == ".png";
+}
+
+static unsigned char nearestPaletteIndex(const unsigned char *rgba, const GamePalette *palette) {
+	if(rgba[3] < 128)
+		return 0;
+	if(!palette)
+		return (unsigned char)(std::max)(1, (int)(0.299f * rgba[0] + 0.587f * rgba[1] + 0.114f * rgba[2]));
+
+	int bestIndex = 1;
+	unsigned int bestDistance = ~0u;
+	for(int i = 1; i < 256; i++) {
+		int dr = (int)rgba[0] - palette->colors[i].r;
+		int dg = (int)rgba[1] - palette->colors[i].g;
+		int db = (int)rgba[2] - palette->colors[i].b;
+		unsigned int distance = (unsigned int)(dr * dr + dg * dg + db * db);
+		if(distance < bestDistance) {
+			bestDistance = distance;
+			bestIndex = i;
+		}
+	}
+	return (unsigned char)bestIndex;
+}
+
+// The WA bitmap constructor owns the pixel allocation.  Do not assume that
+// width * height is the allocation size: rows are padded to rowsize.
+static bool bitmapLayoutIsValid(const Bitmap::BitmapImage *image, int width, int height) {
+	if(!image || image->bitdepth_dwordC != 8
+		|| width <= 0 || height <= 0
+		|| width > 4096 || height > 4096
+		|| image->max_width_dword14 < width
+		|| image->max_height_dword18 < height
+		|| image->rowsize_dword10 < width
+		|| image->rowsize_dword10 > width * 16
+		|| !image->data_dword8)
+		return false;
+
+	size_t stride = (size_t)image->rowsize_dword10;
+	size_t bytes = stride * (size_t)height;
+	if(bytes / stride != (size_t)height || bytes > 64u * 1024u * 1024u)
+		return false;
+	return jellyProbeRead((DWORD)image->data_dword8, bytes);
+}
+
+static bool bitmapStorageIsCommitted(const Bitmap::BitmapImage *image) {
+	if(!image || !image->data_dword8 || image->rowsize_dword10 <= 0
+		|| image->max_height_dword18 <= 0)
+		return false;
+
+	size_t bytes = (size_t)image->rowsize_dword10
+		* (size_t)image->max_height_dword18;
+	if(bytes / (size_t)image->rowsize_dword10
+		!= (size_t)image->max_height_dword18)
+		return false;
+
+	MEMORY_BASIC_INFORMATION mbi{};
+	if(!VirtualQuery((LPCVOID)(DWORD)image->data_dword8, &mbi, sizeof(mbi))
+		|| mbi.State != MEM_COMMIT)
+		return false;
+	ULONG_PTR dataEnd = (ULONG_PTR)(DWORD)image->data_dword8 + bytes;
+	ULONG_PTR regionEnd = (ULONG_PTR)mbi.BaseAddress + mbi.RegionSize;
+	return dataEnd >= (ULONG_PTR)(DWORD)image->data_dword8
+		&& dataEnd <= regionEnd;
+}
+
+static Bitmap::BitmapImage *constructNativeBitmapImage(int width, int height) {
+	if(!origConstructBitmapImage || width <= 0 || height <= 0)
+		return nullptr;
+	auto *image = (Bitmap::BitmapImage *)WaLibc::waMalloc(sizeof(Bitmap::BitmapImage));
+	if(!image)
+		return nullptr;
+	memset(image, 0, sizeof(Bitmap::BitmapImage));
+	Bitmap::BitmapImage *retv;
+	_asm mov ecx, 8
+	_asm mov edi, height
+	_asm mov esi, image
+	_asm push width
+	_asm call origConstructBitmapImage
+	_asm mov retv, eax
+	if(!retv) {
+		WaLibc::waFree(image);
+		return nullptr;
+	}
+	return retv;
+}
+
+static Bitmap::BitmapImage *loadPngImageFile(int a2, char *path) {
+	if(!path)
+		return nullptr;
+	int width = 0, height = 0, channels = 0;
+	unsigned char *rgba = stbi_load(path, &width, &height, &channels, 4);
+	if(!rgba || width <= 0 || height <= 0 || width > 4096 || height > 4096) {
+		if(rgba)
+			stbi_image_free(rgba);
+		printf("Bitmap: failed to load PNG '%s'\n", path);
+		return nullptr;
+	}
+
+	auto *image = constructNativeBitmapImage(width, height);
+	if(!bitmapLayoutIsValid(image, width, height)) {
+		if(image && origDestroyBitmapImage)
+			origDestroyBitmapImage(image, 0, 1);
+		stbi_image_free(rgba);
+		printf("Bitmap: rejected PNG '%s': invalid WA 8-bit bitmap layout\n", path);
+		return nullptr;
+	}
+
+	auto *palette = (GamePalette *)(DWORD)a2;
+	for(int y = 0; y < height; y++) {
+		auto *dst = (unsigned char *)image->data_dword8 + y * image->rowsize_dword10;
+		for(int x = 0; x < width; x++) {
+			dst[x] = nearestPaletteIndex(rgba + 4 * (y * width + x), palette);
+		}
+		// WA may read the padded tail while preparing/remapping an image.
+		if(image->rowsize_dword10 > width)
+			memset(dst + width, 0, (size_t)image->rowsize_dword10 - width);
+	}
+	image->current_width_dword24 = width;
+	image->current_height_dword28 = height;
+	if(Config::rendererEnabled && !BitmapExtension::findBitmapExtension(image) && Renderer::isActive())
+		BitmapExtension::constructBitmapImageExtension(image);
+	stbi_image_free(rgba);
+	printf("Bitmap: loaded PNG '%s' as 8-bit indexed %dx%d\n", path, width, height);
+	return image;
+}
+
+Bitmap::BitmapImage* Bitmap::loadImageFile(DWORD a1, int a2, char * path) {
+	// Switchable from the ini ([general] PngBitmapLoader) rather than being a
+	// compile-time constant, so it can be turned off again without a rebuild if
+	// the WA prepare/remap contract misbehaves. Still off by default: the
+	// ported ProjectX packages are what need it, since they pass .png straight
+	// to registerCustomSprite.
+	const bool kEnablePngBitmapLoader = Config::pngBitmapLoaderEnabled != 0;
+	if(!a2) {
+		DWORD ddDisplay = Game::getAddrDdDisplay();
+		if(ddDisplay && jellyProbeRead(ddDisplay + 0x3120, sizeof(DWORD)))
+			a2 = *(DWORD*)(ddDisplay + 0x3120);
+	}
+	if(hasPngExtension(path)) {
+		if(!kEnablePngBitmapLoader) {
+			printf("Bitmap: PNG loader disabled; refusing '%s'\n", path ? path : "(null)");
+			return nullptr;
+		}
+		return loadPngImageFile(a2, path);
+	}
+	auto *image = callNativeLoadImgFromFile(a1, a2, path);
+	if(!image || !jellyProbeRead((DWORD)image, sizeof(Bitmap::BitmapImage))) {
+		printf("Bitmap: native IMG '%s' returned no readable bitmap\n",
+			path ? path : "(null)");
+		return nullptr;
+	}
+	return image;
+}
+
+Bitmap::BitmapImage* Bitmap::callLoadImgFromFile(DWORD a1, int a2, char * path) {
+	return loadImageFile(a1, a2, path);
 }
 
 DWORD addrCreatePalette;
@@ -122,7 +317,7 @@ Bitmap::BitmapImage * __stdcall hookPrepareImg(GamePalette * palette, int *a3, i
 	_asm call origPrepareImg
 	_asm mov bitmap, eax
 
-	if(Config::rendererEnabled && bitmap->bitdepth_dwordC == 8) {
+	if(Config::rendererEnabled && Renderer::isActive() && bitmap->bitdepth_dwordC == 8) {
 //		auto * data = BitmapExtension::convertBitmapImageToGLRGBA(bitmap, palette, nullptr);
 		auto data = (unsigned char*)bitmap->data_dword8;
 		BitmapExtension::populateBitmapImageExtension(bitmap, data);
@@ -179,3 +374,4 @@ DWORD Bitmap::getAddrBitmapImage8Vtable() {
 DWORD Bitmap::getAddrBitmapImage1Vtable() {
 	return addrBitmapImage1Vtable;
 }
+

@@ -1,10 +1,13 @@
-#ifndef WKJELLYWORM_CUSTOMWEAPONS_H
+﻿#ifndef WKJELLYWORM_CUSTOMWEAPONS_H
 #define WKJELLYWORM_CUSTOMWEAPONS_H
 
 #include <sigscanner.h>
 #include <array>
 #include <map>
+#include <unordered_map>
 #include <vector>
+#include <string>
+#include <sol/forward.hpp>
 #include "entities/tasks/CTaskTeam.h"
 #include "Constants.h"
 #include "entities/Entities.h"
@@ -146,13 +149,34 @@ private:
 	static int __stdcall hookGetAmmo();
 
 	inline static std::array<WeaponStruct, maxCustomWeapons> weaponTable;
+	// Snapshot of the vanilla entries, taken once after WA has filled them.
+	inline static std::array<WeaponStruct, maxStandardWeapons> vanillaWeapons;
+	inline static bool vanillaWeaponsCaptured = false;
 	inline static std::array<DWORD, maxCustomWeapons> weaponPanelSlots;
 	inline static std::array<std::array<int, maxCustomWeapons>, numTeams> ammoTable;
 	inline static std::array<std::array<int, maxCustomWeapons>, numTeams> delayTable;
+	using ShotReloadKey = std::pair<DWORD, int>; // (gameCtx, teamSlot)
+	inline static std::map<ShotReloadKey, std::array<int, maxCustomWeapons>> lastShotReloadDelay;
+
+	struct PendingShotReloadCapture {
+		DWORD gameCtx;
+		int team_slot;
+		int weapon_id;
+		DWORD delay_addr;
+		int peak_delay;
+		int retries;
+	};
+	inline static std::vector<PendingShotReloadCapture> pendingShotReloadCaptures;
 
 	inline static std::vector<WeaponStruct> weaponStructInjectionList;
 	inline static std::vector<std::pair<std::string, DWORD>> weaponImgInjectionList;
 	inline static std::vector<std::pair<std::string, std::string>> weaponNameStorage;
+	// A package's "initialize" Lua entrypoint can legitimately run more than
+	// once per match. Without this, every rerun would append a fresh
+	// duplicate weapon and hand out a NEW id, leaving whichever id the
+	// package's Lua actually captured (e.g. for firing/collision logic)
+	// pointing at a stale or never-populated slot. Keyed by name1+"\x01"+name2.
+	inline static std::unordered_map<std::string, int> customWeaponIdByKey;
 
 	inline static int variablePanelColumns = standardNumColumns;
 	inline static int variablePanelWidthAdd = 144;
@@ -184,6 +208,49 @@ private:
 
 	static void test(int team, int alliance, int weapon);
 	static void test2(int team, int weapon);
+	static int getTeamWeaponAmmo(CTaskTeam *team, int weapon_id);
+	static int getTeamWeaponDelay(CTaskTeam *team, int weapon_id);
+	static int getTeamWeaponLastShotDelay(CTaskTeam *team, int weapon_id);
+	static void recordShotReloadDelay(CTaskTeam *team, int weapon_id);
+	static void recordShotReloadDelayFromContext(DWORD gameCtx, int teamSlot, int weapon_id);
+	static void pollPendingShotReloadCaptures();
+	static void clearShotReloadDelays();
+	static ShotReloadKey makeShotReloadKey(CTaskTeam *team);
+	static ShotReloadKey makeShotReloadKeyFromContext(DWORD gameCtx, int teamSlot);
+	static DWORD getDelayAddrFromContext(DWORD gameCtx, int teamSlot, int weapon_id);
+	static int readBestShotDelayFromContext(DWORD gameCtx, int teamSlot, int weapon_id, DWORD fixedDelayAddr);
+	static int readBestShotDelay(CTaskTeam *team, int weapon_id, DWORD fixedDelayAddr);
+	static void storeShotReloadDelay(ShotReloadKey key, int weapon_id, int delay);
+	static void setTeamWeaponAmmo(CTaskTeam *team, int weapon_id, int value);
+	static void setTeamWeaponDelay(CTaskTeam *team, int weapon_id, int value);
+	static void adjustTeamDelays(CTaskTeam *team, int amount);
+
+	static DWORD getGameGlobalFromTeam(CTaskTeam *team);
+	static DWORD getWeaponPanelFromTeam(CTaskTeam *team);
+	static int getAllianceIdFromTeam(CTaskTeam *team);
+	static int getPanelTeamSlotFromTeam(CTaskTeam *team);
+	static int getTeamSlotFromTeam(CTaskTeam *team);
+	static DWORD getTeamWeaponFieldAddr(CTaskTeam *team, int weapon_id, int tabletype);
+	static DWORD getPanelWeaponFieldAddr(CTaskTeam *team, int weapon_id, int tabletype);
+	static void writeStandardWeaponField(CTaskTeam *team, int weapon_id, int tabletype, int value);
+	static void markWeaponPanelDirty(CTaskTeam *team);
+
+	// --- diagnostics / raw-memory helpers (для /delay probe и обхода гонки "slot успел смениться") ---
+	inline static int dbgSubtractAmmoV1Calls = 0;
+	inline static int dbgSubtractAmmoV1StandardCalls = 0;
+	inline static int dbgSubtractAmmoV2Calls = 0;
+	inline static int dbgSubtractAmmoV2StandardCalls = 0;
+	inline static int dbgRecordShotCalls = 0;
+	inline static int dbgRecordShotStoredCalls = 0;
+	inline static int dbgLastWeaponShot = -1;
+	inline static int dbgLastCaptureDelay = 0;
+	inline static int dbgLastRecordedDelay = 0;
+	inline static int dbgPendingCaptureCount = 0;
+
+	static int __stdcall readMemInt(DWORD addr);
+	static void __stdcall writeMemInt(DWORD addr, int value);
+	static std::string getDebugCounters();
+
 public:
 //	static int onConstructGlobalContext(int a1);
 	static int install(SignatureScanner &, module);
@@ -195,7 +262,28 @@ public:
 	static void onConstructGlobalContext(int a1);
 
 	static int registerCustomWeapon(WeaponStruct weaponStruct, std::string img, std::string name1, std::string name2);
+	// Lua-facing wrapper: type-checks before touching the struct.
+	static int registerCustomWeaponLua(sol::object weaponObj, std::string img, std::string name1, std::string name2);
 	static void resetConfig();
+
+	// Vanilla weapon templates.
+	//
+	// hookInitializeWeaponTable points the game's weapon table at our own
+	// weaponTable BEFORE calling the original, so WA itself fills entries
+	// 0..maxStandardWeapons-1 with genuine vanilla WeaponStructs. We snapshot
+	// those once, which gives packages a correct WA-semantics base to build a
+	// custom weapon on.
+	//
+	// This exists because px2jelly ported ProjectX's own weapon-struct bytes
+	// into WA's struct layout. The two layouts are unrelated and all but three
+	// fields here are still "unknownXX", so those bytes decode to whatever WA
+	// happens to read at that offset -- which is why ported weapons fire as
+	// sheep or dynamite. Basing a custom weapon on a vanilla template and
+	// adding behaviour from Lua is the only approach that can actually work.
+	static WeaponStruct cloneVanillaWeapon(int id);
+	static bool vanillaWeaponsReady();
+	static int dumpVanillaWeapons(std::string path);
 };
 
 #endif //WKJELLYWORM_CUSTOMWEAPONS_H
+

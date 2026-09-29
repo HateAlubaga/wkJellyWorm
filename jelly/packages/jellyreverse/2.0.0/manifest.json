@@ -1,0 +1,15 @@
+{
+  "name": "jellyreverse",
+  "description": "Reverse-velocity + inverted speed acquisition + rope-flight state (wkJellyWorm API)",
+  "version": "2.0.0",
+  "author": "you",
+  "scripts": [
+    "main.lua"
+  ],
+  "sprites": [],
+  "imgs": [],
+  "dependencies": [],
+  "chatCommands": ["rev", "jr", "reversal", "reverse"],
+  "minJellyVersion": "1.2.0",
+  "capabilities": []
+}

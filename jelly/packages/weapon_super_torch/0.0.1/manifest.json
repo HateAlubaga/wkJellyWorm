@@ -1,0 +1,12 @@
+{
+  "name": "weapon_super_torch",
+  "description": "Converted from PX library weapon_super_torch.pxl",
+  "version": "0.0.1",
+  "author": "px2jelly",
+  "scripts": [
+    "main.lua"
+  ],
+  "sprites": [],
+  "imgs": [],
+  "dependencies": []
+}

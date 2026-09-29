@@ -3,6 +3,7 @@
 
 
 #include <sigscanner.h>
+#include <sol/forward.hpp>
 
 class CTaskWorm;
 class CTaskMissile;
@@ -127,6 +128,14 @@ private:
 public:
 	static int install(SignatureScanner &, module);
 	static CTaskMissile* callCreateWeaponProjectile(CGameTask *This, WeaponProjectileParams *projectileParams, WeaponLaunchParams *launchParams);
+	// Lua-facing entry point. Every ported package calls this with a single
+	// WeaponProjectileParams argument (no CGameTask "This", no launch
+	// params) -- the raw 3-pointer signature above is never what package
+	// code actually sends. Validates the argument type (a bare Lua table
+	// here is a real, previously crash-causing case) and supplies "This"
+	// from the current turn's task, no-opping safely when neither is
+	// available instead of dereferencing a bad/absent pointer.
+	static sol::object createWeaponProjectileLua(sol::object paramsObj, sol::optional<sol::object> launchObj);
 };
 
 

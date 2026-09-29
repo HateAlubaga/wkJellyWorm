@@ -146,10 +146,15 @@ private:
 
 public:
 	static int install(SignatureScanner &, module);
+	static BitmapImage* loadImageFile(DWORD a1, int a2, char * path);
 	static BitmapImage* callLoadImgFromFile(DWORD a1, int a2, char * path);
 
 	static void callDrawBitmapGlobal(int posY, int a3, int posX, BitmapImage *bitmap, int a6, int a7, int a8, int a9);
 	static int callCreatePalette(void *data);
+
+	static BitmapTextbox *callConstructTextbox(DWORD DDDisplay, BitmapTextbox *Dst, int length, int fontid);
+	static int callSetTextboxText(BitmapTextbox *textbox, char *msg, int textcolor, int color1, int color2, int *a6, int *a7, int opacity);
+	static int callDrawTextboxLocal(int *gamescene, int posY, int a3, int posX, BitmapTextbox *textbox, int a6, int a7, int a8);
 
 	static DWORD getAddrBitmapImageVtable();
 	static DWORD getAddrBitmapImage8Vtable();

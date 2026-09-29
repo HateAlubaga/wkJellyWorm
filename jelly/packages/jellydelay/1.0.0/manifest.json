@@ -1,0 +1,15 @@
+{
+  "name": "jellydelay",
+  "description": "Weapon delay regen via getTeamWeaponAmmo API (copy to jelly/packages/)",
+  "version": "1.0.0",
+  "author": "you",
+  "scripts": [
+    "main.lua"
+  ],
+  "sprites": [],
+  "imgs": [],
+  "dependencies": [],
+  "chatCommands": ["delay"],
+  "minJellyVersion": "1.2.0",
+  "capabilities": []
+}

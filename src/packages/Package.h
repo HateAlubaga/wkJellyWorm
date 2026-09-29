@@ -7,33 +7,30 @@
 #include <json.hpp>
 #include <tuple>
 #include "../Lua.h"
+#include "../Utils.h"
 #include <filesystem>
 
 class Package {
 public:
 	struct Version {
 		int major = 0, minor = 0, revision = 0;
-		bool operator < (Version& other) {
-			if (major < other.major)
-				return true;
-			if (minor < other.minor)
-				return true;
-			if (revision < other.revision)
-				return true;
-			return false;
+		bool operator<(const Version &other) const {
+			if(major != other.major) return major < other.major;
+			if(minor != other.minor) return minor < other.minor;
+			return revision < other.revision;
 		}
 		void parse(std::string version) {
 			std::sscanf(version.c_str(), "%d.%d.%d", &major, &minor, &revision);
 		}
-		bool operator == (Version& other){
+		bool operator==(const Version &other) const {
 			return major == other.major && minor == other.minor && revision == other.revision;
 		}
 	};
 
-	bool operator<(Package& other) {
-		return other.getVersion() < this->getVersion(); //namecheck is omitted
+	bool operator<(const Package &other) const {
+		return getVersion() < other.getVersion();
 	}
-	bool operator == (Package& other){
+	bool operator == (const Package &other) const {
 		return other.getName() == this->getName() && other.getVersionstr() == this->getVersionstr();
 	}
 
@@ -42,13 +39,17 @@ public:
 		try {
 			if(!luaEnv)
 				throw std::runtime_error("luaEnv is null");
+			setActivePackageDir(parentpath);
 			auto func = luaEnv->get<type_t>(luaname);
 			if(!func)
 				throw std::runtime_error("missing lua function: " + luaname);
-			return func(args...);
+			ReturnType result = func(args...);
+			clearActivePackageDir();
+			return result;
 		} catch(std::exception & e) {
-			printf("Package(%s)::%s exception: %s\n", getIdentifier().c_str(), luaname.c_str(), e.what());
-			return 0;
+			clearActivePackageDir();
+			reportLuaError(getIdentifier(), e.what());
+			return ReturnType{};
 		}
 	}
 
@@ -68,15 +69,32 @@ public:
 	nlohmann::json &getManifest();
 
 	Version &getVersion();
+	const Version &getVersion() const;
 
 	const std::string &getName() const;
 	const std::string &getVersionstr() const;
 	std::string getIdentifier();
+	std::string getDescription() const;
+	std::string getAuthor() const;
+	std::string getMinJellyVersion() const;
+	std::vector<std::string> getChatCommands() const;
+	std::vector<std::string> getCapabilities() const;
 
 	void enable();
 	void disable();
+	bool isLoaded() const;
+	const std::filesystem::path &getDir() const { return parentpath; }
 
+	static void setActivePackageDir(const std::filesystem::path &dir);
+	static void clearActivePackageDir();
+	static std::filesystem::path getActivePackageDir();
 
+	bool saveData(const std::string &jsonStr);
+	std::string loadData();
+
+private:
+	std::filesystem::path dataFilePath() const;
+	inline static thread_local std::filesystem::path activePackageDir;
 };
 
 

@@ -6,6 +6,7 @@
 #include <sigscanner.h>
 #include <vector>
 #include <string>
+#include <unordered_map>
 #include "renderer/Bitmap.h"
 class Sprites {
 public:
@@ -62,6 +63,15 @@ public:
 
 private:
 	static inline std::vector<std::string> customSprites;
+	// A package's "initialize" Lua entrypoint can legitimately run more than
+	// once per match (re-applied autostart, re-entering the lobby, etc.).
+	// Without this, every rerun would append a fresh duplicate to
+	// customSprites and hand out a NEW id for the same file, leaving
+	// whichever id the package's Lua actually captured pointing at a
+	// never-loaded slot. Keyed by resolved path so the same asset always
+	// gets the same id no matter how many times it's registered.
+	static inline std::unordered_map<std::string, int> resolvedSpriteIds;
+	static inline std::vector<std::pair<int, int>> spriteOverrides;
 	static inline bool hookingVfs = false;
 	static inline std::string hookingFilename;
 
@@ -69,11 +79,13 @@ private:
 	static int __fastcall hookLoadSprite(DWORD DD_Display, int EDX, int palette, int id, int a4, int a5, const char *filename);
 public:
 
-	static const int customSpriteStartingId = 700;
+	// ProjectX reserves override targets through 850; generated handles must not collide.
+	static const int customSpriteStartingId = 851;
 
 	static void onConstructGlobalContext(int a1);
 	static int install(SignatureScanner &, module);
 	static int registerCustomSprite(std::string filename);
+	static void setSpriteOverride(int targetId, int sourceId);
 	static void resetConfig();
 	static void callDrawSpriteLocal(int posy, int layer, int posx, int sprite, int frame);
 	static void callDrawSpriteGlobal(int posy, int layer, int posx, int sprite, int frame);
@@ -81,3 +93,4 @@ public:
 
 
 #endif //WKJELLYWORM_SPRITES_H
+

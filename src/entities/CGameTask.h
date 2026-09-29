@@ -3,6 +3,7 @@
 
 
 #include "CTask.h"
+#include "../Utils.h"
 
 class CGameTask : public CTask {
 public:
@@ -85,7 +86,7 @@ public:
 				try {
 					ret |= cb(This, a2, a3);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -100,7 +101,7 @@ public:
 				try {
 					ret |= cb(This, a2, a3);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -115,7 +116,7 @@ public:
 				try {
 					ret |= cb(This, a2);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -130,7 +131,7 @@ public:
 				try {
 					ret |= cb(This, a2);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -145,7 +146,7 @@ public:
 				try {
 					ret |= cb(This, a2, a3);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -160,7 +161,7 @@ public:
 				try {
 					ret |= cb(This);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -175,7 +176,7 @@ public:
 				try {
 					ret |= cb(This);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -190,7 +191,7 @@ public:
 				try {
 					ret |= cb(This, a2);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -205,7 +206,7 @@ public:
 				try {
 					ret |= cb(This);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -220,7 +221,7 @@ public:
 				try {
 					ret |= cb(This);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -235,7 +236,7 @@ public:
 				try {
 					ret |= cb(This, a2, a3, a4);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {
@@ -250,7 +251,7 @@ public:
 				try {
 					ret |= cb(This);
 				} catch(std::exception & e) {
-					printf("callback exception: %s\n", e.what());
+					reportLuaError("CGameTask callback", e.what());
 				}
 			}
 			if(!ret) {

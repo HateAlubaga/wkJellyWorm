@@ -8,6 +8,8 @@ class Lobby {
 private:
 	inline static DWORD addrMyNickname = 0;
 	inline static DWORD addrLobbyHostObj = 0;
+	inline static DWORD addrLobbyClientObj = 0;
+	inline static int currentFrontendScreen = 0;
 	static int __fastcall hookLobbyHostCommands(void* This, void* EDX, char **commandstrptr, char **argstrptr);
 	static int __fastcall hookLobbyClientCommands(void* This, void* EDX, char **commandstrptr, char **argstrptr);
 	static int __stdcall hookLobbyDisplayMessage(int a1, char *msg);
@@ -22,7 +24,14 @@ public:
 	static int install(SignatureScanner &, module);
 
 	static int sendConfigString(void * This);
+	static bool isHost();
+	static void *getHostObj();
+	static void captureHostLobbyObj(void *This);
+	static void captureClientLobbyObjFromDisplay(int displayMsgThis);
+	static void *resolveClientLobbyObj(int displayMsgThis);
+	static void flushPendingClientCaps();
+	static int getFrontendScreen();
+	static bool isValidLobbyObj(void *This);
 };
-
 
 #endif //WKJELLYWORM_LOBBY_H

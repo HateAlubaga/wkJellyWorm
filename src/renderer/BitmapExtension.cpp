@@ -1,10 +1,15 @@
 
 #include "../WaLibc.h"
 #include "BitmapExtension.h"
+#include "Renderer.h"
+#include "../Config.h"
 
 
 ExtendedBitmap::ExtendedBitmap(Bitmap::BitmapImage *bitmap, Sprites * sprite, int align) : populated(false), sprite(sprite), align(align) {
 	bitdepth = 8;
+	redraw = false;
+	spriteMaxW = 0;
+	spriteMaxH = 0;
 }
 
 
@@ -16,65 +21,72 @@ ExtendedBitmap * BitmapExtension::constructBitmapImageExtension(Bitmap::BitmapIm
 }
 
 bool BitmapExtension::populateBitmapImageExtension(Bitmap::BitmapImage *bitmap, unsigned char * data, int forceWidth, int forceHeight) {
-	if(bitmap) {
-		auto extension = findBitmapExtension(bitmap);
-		if(extension && !extension->populated) {
-			int width = (!forceWidth) ? bitmap->max_width_dword14 : forceWidth;
-			int height = (!forceHeight) ? bitmap->max_height_dword18 : forceHeight;
+	if(!bitmap)
+		return false;
+	if(Config::rendererEnabled && !Renderer::ensureGLContext())
+		return false;
 
-			glGenFramebuffers(1, &extension->framebuffer);
-			glBindFramebuffer(GL_FRAMEBUFFER, extension->framebuffer);
-			glGenTextures(1, &extension->texture);
-			GLint oldbind;
-			glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldbind);
-			glBindTexture(GL_TEXTURE_2D, extension->texture);
+	auto extension = findBitmapExtension(bitmap);
+	if(extension && !extension->populated) {
+		int width = (!forceWidth) ? bitmap->max_width_dword14 : forceWidth;
+		int height = (!forceHeight) ? bitmap->max_height_dword18 : forceHeight;
 
-			if(extension->align != 4)
-				glPixelStorei(GL_UNPACK_ALIGNMENT, extension->align);
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, width, height, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, data);
-			if(extension->align != 4)
-				glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-//			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+		glGenFramebuffers(1, &extension->framebuffer);
+		glBindFramebuffer(GL_FRAMEBUFFER, extension->framebuffer);
+		glGenTextures(1, &extension->texture);
+		GLint oldbind;
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldbind);
+		glBindTexture(GL_TEXTURE_2D, extension->texture);
 
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		if(extension->align != 4)
+			glPixelStorei(GL_UNPACK_ALIGNMENT, extension->align);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_R8UI, width, height, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, data);
+		if(extension->align != 4)
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
-			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, extension->texture, 0);
-			glDrawBuffer(GL_COLOR_ATTACHMENT0);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-			if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-				printf("!!!!!!!!!!!!!!!!!!! populateBitmapImageExtension: Failed to create framebuffer\n");
-			}
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, extension->texture, 0);
+		glDrawBuffer(GL_COLOR_ATTACHMENT0);
 
-			glBindTexture(GL_TEXTURE_2D, oldbind);
-			glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-			extension->populated = true;
-			return true;
+		GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+		if(fboStatus != GL_FRAMEBUFFER_COMPLETE) {
+			printf("!!!!!!!!!!!!!!!!!!! populateBitmapImageExtension: Failed to create framebuffer status=0x%X\n", fboStatus);
 		}
+
+		glBindTexture(GL_TEXTURE_2D, oldbind);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+		extension->populated = true;
+		return true;
 	}
 	return false;
 }
 
 bool BitmapExtension::paintOnBitmapImageExtension(Bitmap::BitmapImage *bitmap, unsigned char *data, int posX, int posY, int width, int height) {
-	if(bitmap) {
-		auto extension = findBitmapExtension(bitmap);
-		if (extension && extension->populated) {
-			glEnable(GL_TEXTURE_2D);
-			GLint oldbind;
-			glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldbind);
-			glBindTexture(GL_TEXTURE_2D, extension->texture);
-//			glTexSubImage2D(GL_TEXTURE_2D, 0, posX, posY, width, height, GL_RGBA, GL_UNSIGNED_BYTE, data);
-			if(extension->align != 4)
-				glPixelStorei(GL_UNPACK_ALIGNMENT, extension->align);
-			glTexSubImage2D(GL_TEXTURE_2D, 0, posX, posY, width, height, GL_RED_INTEGER, GL_UNSIGNED_BYTE, data);
-			if(extension->align != 4)
-				glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	if(!bitmap)
+		return false;
+	if(Config::rendererEnabled && !Renderer::ensureGLContext())
+		return false;
 
-			glBindTexture(GL_TEXTURE_2D, oldbind);
-			glDisable(GL_TEXTURE_2D);
-			return true;
-		}
+	auto extension = findBitmapExtension(bitmap);
+	if (extension && extension->populated) {
+		glEnable(GL_TEXTURE_2D);
+		GLint oldbind;
+		glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldbind);
+		glBindTexture(GL_TEXTURE_2D, extension->texture);
+		if(extension->align != 4)
+			glPixelStorei(GL_UNPACK_ALIGNMENT, extension->align);
+		glTexSubImage2D(GL_TEXTURE_2D, 0, posX, posY, width, height, GL_RED_INTEGER, GL_UNSIGNED_BYTE, data);
+		if(extension->align != 4)
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+
+		glBindTexture(GL_TEXTURE_2D, oldbind);
+		glDisable(GL_TEXTURE_2D);
+		return true;
 	}
 	return false;
 }
@@ -82,14 +94,14 @@ bool BitmapExtension::paintOnBitmapImageExtension(Bitmap::BitmapImage *bitmap, u
 unsigned char * BitmapExtension::convertBitmapImageToGLRGBA(Bitmap::BitmapImage *bitmap, GamePalette *gamePalette, ScreenPalette *screenPalette, int forceWidth, int forceHeight) {
 	int width = (!forceWidth && bitmap) ? bitmap->max_width_dword14 : forceWidth;
 	int height = (!forceHeight && bitmap) ? bitmap->max_height_dword18 : forceHeight;
-	auto data = (unsigned char *) WaLibc::waMalloc(sizeof(DWORD) * width * height);
+	auto data = (DWORD *) WaLibc::waMalloc(sizeof(DWORD) * width * height);
 	if(!data) return (unsigned char*)data;
 
 	if(!gamePalette && !screenPalette) {
 		for (int y = 0; y < height; y++) {
 			for (int x = 0; x < width; x++) {
 				unsigned char color = *(unsigned char *) (bitmap->data_dword8 + y * bitmap->rowsize_dword10 + x);
-				data[y * bitmap->max_width_dword14 + x] = 0xFF000000 | (color << 16) | (color << 8) | color;
+				data[y * width + x] = 0xFF000000 | (color << 16) | (color << 8) | color;
 			}
 		}
 	}
@@ -98,7 +110,7 @@ unsigned char * BitmapExtension::convertBitmapImageToGLRGBA(Bitmap::BitmapImage 
 			for (int x = 0; x < width; x++) {
 				unsigned char palcolor = *(unsigned char*)(bitmap->data_dword8 + y*bitmap->rowsize_dword10 + x);
 				DWORD color = (!palcolor) ? 0 : gamePalette->colors[palcolor].toRGBA();
-				data[y * bitmap->max_width_dword14 + x] = color;
+				data[y * width + x] = color;
 			}
 		}
 	}
@@ -106,7 +118,7 @@ unsigned char * BitmapExtension::convertBitmapImageToGLRGBA(Bitmap::BitmapImage 
 		for (int y = 0; y < height; y++) {
 			for (int x = 0; x < width; x++) {
 				unsigned char palcolor = *(unsigned char*)(bitmap->data_dword8 + y*bitmap->rowsize_dword10 + x);
-				data[y * bitmap->max_width_dword14 + x] = (!palcolor) ? 0 : screenPalette->colors[palcolor].toRGBA();
+				data[y * width + x] = (!palcolor) ? 0 : screenPalette->colors[palcolor].toRGBA();
 			}
 		}
 	}
@@ -120,7 +132,7 @@ bool BitmapExtension::destroyBitmapImageExtension(Bitmap::BitmapImage *bitmap) {
 	if(bitmap) {
 		auto extension = findBitmapExtension(bitmap);
 		if(extension) {
-			if(extension->populated) {
+			if(extension->populated && Renderer::ensureGLContext()) {
 				glDeleteFramebuffers(1, &extension->framebuffer);
 				glDeleteTextures(1, &extension->texture);
 			}
@@ -150,6 +162,9 @@ void BitmapExtension::redrawBitmapImageExtension(Bitmap::BitmapImage *bitmap) {
 }
 
 void BitmapExtension::convertSprite(Sprites *sprite, GamePalette *palette) {
+	if(Config::rendererEnabled && !Renderer::ensureGLContext())
+		return;
+
 	auto bitmap = (Bitmap::BitmapImage8 *) &sprite->bitmap_dword34;
 	auto extension = constructBitmapImageExtension(bitmap, sprite);
 
@@ -189,5 +204,3 @@ void BitmapExtension::convertSprite(Sprites *sprite, GamePalette *palette) {
 void BitmapExtension::onDestroySprite(Sprites *sprite) {
 	destroyBitmapImageExtension((Bitmap::BitmapImage*)&sprite->bitmap_dword34);
 }
-
-

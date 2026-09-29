@@ -34,8 +34,32 @@ int CTask::install(SignatureScanner &signatureScanner, module mod) {
 	lua->new_usertype<CTaskList>("CTaskList",
 	   "iterable", [](CTaskList& ns) { return sol::as_container(ns);},
 	   "size", &CTaskList::size,
-	   "get", [](CTaskList& ns, int index) { return ns[index-1];}
+	   "get", [](CTaskList& ns, int index) -> sol::optional<CTask *> {
+		   CTask *child = ns[index - 1];
+		   if (!child) {
+			   return sol::nullopt;
+		   }
+		   return child;
+	   }
 	);
+
+	lua->set_function("isTaskAlive", [](CTask *task) { return task != nullptr; });
+	lua->set_function("taskChildCount", [](CTask *task) -> int {
+		if (!task) {
+			return 0;
+		}
+		return task->children.size();
+	});
+	lua->set_function("taskChildAt", [](CTask *task, int index) -> sol::optional<CTask *> {
+		if (!task || index < 1) {
+			return sol::nullopt;
+		}
+		CTask *child = task->children[index - 1];
+		if (!child) {
+			return sol::nullopt;
+		}
+		return child;
+	});
 
 
 	DWORD addrConstructCTask =  Hooks::scanPattern("ConstructCTask", "\x64\xA1\x00\x00\x00\x00\x6A\xFF\x68\x00\x00\x00\x00\x50\x64\x89\x25\x00\x00\x00\x00\x56\x57\x8B\x7C\x24\x18\xC7\x07\x00\x00\x00\x00\x6A\x60\xC7\x47\x00\x00\x00\x00\x00\xC7\x47\x00\x00\x00\x00\x00\xC7\x47\x00\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x6A\x40", "??????xxx????xxxx????xxxxxxxx????xxxx?????xx?????xx?????x????xx", 0x5625A0);
