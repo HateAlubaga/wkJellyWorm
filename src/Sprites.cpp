@@ -1,4 +1,5 @@
 
+#include <cmath>
 #include "Sprites.h"
 #include "Hooks.h"
 #include "Game.h"
@@ -95,7 +96,7 @@ static int deduceFrameCount(int width, int height) {
 	return 1;
 }
 
-static bool patchSpriteFromImageFile(Sprites *sprite, const std::string &file) {
+static bool patchSpriteFromImageFile(Sprites *sprite, const std::string &file, int frameHint, int flagHint) {
 	if(!sprite)
 		return false;
 
@@ -117,7 +118,10 @@ static bool patchSpriteFromImageFile(Sprites *sprite, const std::string &file) {
 		return false;
 	}
 
-	int frames = deduceFrameCount(width, height);
+	// The package's own frame count (ProjectX LoadSprite argument) wins over
+	// the square-frame guess: e.g. 40x680 golf flags are 5 frames, not 17.
+	int frames = (frameHint >= 1 && frameHint <= kFrameTableSlots && frameHint <= height)
+		? frameHint : deduceFrameCount(width, height);
 	int frameHeight = height / frames;
 	int rowsize = bitmap->rowsize_dword10;
 
@@ -149,6 +153,15 @@ static bool patchSpriteFromImageFile(Sprites *sprite, const std::string &file) {
 	WaLibc::waFree(bitmap);
 
 	sprite->frame_meta_ptr_dword28 = table;
+	// WA picks the frame as (phase * max_frames) >> 16, clamped or wrapped by
+	// flag bit 0 and mirrored by bit 1 (WA.exe 0x4FAD30). A non-zero dword24
+	// switches to a range mode that always shows frame 0, which is wrong
+	// for a vertical strip, so clear it.
+	spriteLog("custom sprite '%s': template flags=0x%X dword1C=%d dword20=%d dword24=%d\n",
+		file.c_str(), sprite->flags_word10, sprite->dword1C, sprite->dword20, sprite->dword24);
+	sprite->dword24 = 0;
+	WORD animBits = (WORD)(flagHint >= 0 ? (flagHint & 3) : 1);
+	sprite->flags_word10 = (WORD)((sprite->flags_word10 & ~3) | animBits);
 	sprite->width_wordC = (WORD)width;
 	sprite->height_wordE = (WORD)frameHeight;
 	sprite->max_frames_word16 = (WORD)frames;
@@ -159,13 +172,75 @@ static bool patchSpriteFromImageFile(Sprites *sprite, const std::string &file) {
 	return true;
 }
 
+// Loads one custom sprite into table slot `id` (which must be empty) and
+// returns the sprite object, or nullptr if the native loader refused it.
+static Sprites *loadCustomSpriteIntoSlot(DWORD addrDD_Display, DWORD addrPC_FileArchive, int id, const std::string &file) {
+	bool isPlainImage = hasImageFileExtension(file);
+	// A plain image cannot go through the native parser, so bootstrap the
+	// sprite object from the template and replace its contents after.
+	std::string loadName = isPlainImage ? std::string(kTemplateSpritePath) : file;
+	spriteLog("loading custom sprite: %s = %d%s\n", file.c_str(), id, isPlainImage ? " (via image decode)" : "");
+
+	int loaded = 0;
+	Sprites::beginVfsHook(loadName);
+	// A missing/broken optional sprite must not abort global-context
+	// construction. The weapon package and its logic are independent
+	// from the visual resource.
+	try {
+		loaded = Sprites::loadSpriteNative(addrDD_Display, 1, id, addrPC_FileArchive, loadName.c_str());
+	} catch(const std::exception & e) {
+		spriteLog("custom sprite '%s' failed, continuing without it: %s\n", file.c_str(), e.what());
+	} catch(...) {
+		spriteLog("custom sprite '%s' failed, continuing without it\n", file.c_str());
+	}
+	Sprites::endVfsHook();
+
+	if(!loaded) {
+		spriteLog("custom sprite '%s': native loader rejected it\n", file.c_str());
+		return nullptr;
+	}
+	DWORD slot = addrDD_Display + kSpriteTableOffset + (DWORD)id * 4;
+	Sprites *sprite = jellyProbeRead(slot, sizeof(DWORD)) ? *(Sprites **)slot : nullptr;
+	if(!isPlainImage)
+		return sprite;
+	spriteLog("custom sprite '%s': id=%d slot=0x%X spritePtr=0x%X\n", file.c_str(), id, slot, (DWORD)sprite);
+	if(sprite && jellyProbeRead((DWORD)sprite, sizeof(Sprites)))
+		patchSpriteFromImageFile(sprite, file, Sprites::frameHintFor(file), Sprites::flagHintFor(file));
+	else
+		spriteLog("custom sprite '%s': sprite slot %d unreadable after load\n", file.c_str(), id);
+	return sprite;
+}
+
+void Sprites::aliasIntoSlot(DWORD ddDisplay, Sprites *sprite, int targetId) {
+	DWORD targetSlot = ddDisplay + kSpriteTableOffset + (DWORD)targetId * 4;
+	if(!jellyProbeRead(targetSlot, sizeof(DWORD)))
+		return;
+	Sprites *original = *(Sprites **)targetSlot;
+	if(original == sprite)
+		return;
+	*(Sprites **)targetSlot = sprite;
+	aliases[sprite].slots++;
+	if(original) {
+		auto previous = aliases.find(original);
+		if(previous != aliases.end()) {
+			// The slot held another alias of ours, not a native sprite: it just
+			// loses one slot, and nothing extra must be freed for it.
+			previous->second.slots--;
+		} else {
+			aliases[sprite].originals.push_back(original);
+		}
+	}
+	spriteLog("SetSpriteOverride: target %d -> ptr=0x%X (displaced 0x%X)\n", targetId, (DWORD)sprite, (DWORD)original);
+}
+
 void Sprites::onConstructGlobalContext(int a1) {
-	if(!Config::customSpritesEnabled || customSprites.empty() || !Game::isValidDdGame())
+	if(!Config::customSpritesEnabled || (customSprites.empty() && fileOverrides.empty()) || !Game::isValidDdGame())
 		return;
 
 	auto addrDD_Display = Game::getAddrDdDisplay();
 	auto addrPC_FileArchive = *(DWORD *)(Game::getAddrDDGame() + 0x4C0);
 	int id = customSpriteStartingId;
+	aliases.clear();
 
 	for(auto & it : customSprites) {
 		if(id < kMinSpriteId || id > kMaxSpriteId) {
@@ -173,45 +248,12 @@ void Sprites::onConstructGlobalContext(int a1) {
 			id++;
 			continue;
 		}
-
-		bool isPlainImage = hasImageFileExtension(it);
-		// A plain image cannot go through the native parser, so bootstrap the
-		// sprite object from the template and replace its contents after.
-		hookingFilename = isPlainImage ? std::string(kTemplateSpritePath) : it;
-		spriteLog("loading custom sprite: %s = %d%s\n", it.c_str(), id, isPlainImage ? " (via image decode)" : "");
-
-		int loaded = 0;
-		hookingVfs = true;
-		// A missing/broken optional sprite must not abort global-context
-		// construction. The weapon package and its logic are independent
-		// from the visual resource.
-		try {
-			loaded = hookLoadSprite(addrDD_Display, 0, 1, id, 0, addrPC_FileArchive, hookingFilename.c_str());
-		} catch(const std::exception & e) {
-			spriteLog("custom sprite '%s' failed, continuing without it: %s\n", it.c_str(), e.what());
-		} catch(...) {
-			spriteLog("custom sprite '%s' failed, continuing without it\n", it.c_str());
-		}
-		hookingVfs = false;
-
-		if(loaded && isPlainImage) {
-			DWORD slot = addrDD_Display + kSpriteTableOffset + (DWORD)id * 4;
-			Sprites *sprite = jellyProbeRead(slot, sizeof(DWORD)) ? *(Sprites **)slot : nullptr;
-			spriteLog("custom sprite '%s': id=%d slot=0x%X spritePtr=0x%X\n", it.c_str(), id, slot, (DWORD)sprite);
-			if(sprite && jellyProbeRead((DWORD)sprite, sizeof(Sprites)))
-				patchSpriteFromImageFile(sprite, it);
-			else
-				spriteLog("custom sprite '%s': sprite slot %d unreadable after load\n", it.c_str(), id);
-		} else if(!loaded) {
-			spriteLog("custom sprite '%s': native loader rejected it\n", it.c_str());
-		}
+		loadCustomSpriteIntoSlot(addrDD_Display, addrPC_FileArchive, id, it);
 		id++;
 	}
 
 	// ProjectX weapons keep fixed sprite slot numbers in WeaponStruct. Redirect
 	// those slots to the decoded package art after all custom sprites exist.
-	aliasedOriginals.clear();
-	aliasedDestroyCount.clear();
 	for(const auto &overridePair : spriteOverrides) {
 		int targetId = overridePair.first;
 		int sourceId = overridePair.second;
@@ -221,18 +263,70 @@ void Sprites::onConstructGlobalContext(int a1) {
 			continue;
 		}
 		DWORD sourceSlot = addrDD_Display + kSpriteTableOffset + (DWORD)sourceId * 4;
-		DWORD targetSlot = addrDD_Display + kSpriteTableOffset + (DWORD)targetId * 4;
 		Sprites *source = jellyProbeRead(sourceSlot, sizeof(DWORD)) ? *(Sprites **)sourceSlot : nullptr;
 		if(!source || !jellyProbeRead((DWORD)source, sizeof(Sprites))) {
 			spriteLog("SetSpriteOverride: source %d unreadable for target %d\n", sourceId, targetId);
 			continue;
 		}
-		Sprites *original = jellyProbeRead(targetSlot, sizeof(DWORD)) ? *(Sprites **)targetSlot : nullptr;
-		if(original == source)
+		if(aliases.find(source) == aliases.end())
+			aliases[source].slots = 1; // the source keeps its own slot too
+		aliasIntoSlot(addrDD_Display, source, targetId);
+	}
+
+	// Image-file overrides (worm skins and the like). WA's LoadSprite refuses
+	// an occupied id, so each image is loaded into a free scratch slot, moved
+	// into its target slots, and the scratch slot is emptied again.
+	for(const auto &entry : fileOverrides) {
+		const std::string &file = entry.first;
+		if(entry.second.empty())
 			continue;
-		*(Sprites **)targetSlot = source;
-		aliasedOriginals[source].push_back(original);
-		spriteLog("SetSpriteOverride: target %d -> source %d ptr=0x%X\n", targetId, sourceId, (DWORD)source);
+		int scratch = 0;
+		for(int candidate = kMaxSpriteId; candidate >= kMinSpriteId; candidate--) {
+			if(candidate >= customSpriteStartingId && candidate < customSpriteStartingId + (int)customSprites.size())
+				continue;
+			DWORD a = addrDD_Display + kSpriteTableOffset + (DWORD)candidate * 4;
+			DWORD b = addrDD_Display + kSpriteTableOffset + 0x1000 + (DWORD)candidate * 4;
+			if(jellyProbeRead(a, 4) && jellyProbeRead(b, 4) && !*(DWORD *)a && !*(DWORD *)b) {
+				scratch = candidate;
+				break;
+			}
+		}
+		if(!scratch) {
+			spriteLog("SetSpriteOverride '%s': no free scratch slot; skipping\n", file.c_str());
+			continue;
+		}
+		DWORD paletteEntry = addrDD_Display + 8 + (DWORD)scratch * 4;
+		DWORD savedPalette = jellyProbeRead(paletteEntry, 4) ? *(DWORD *)paletteEntry : 0;
+		Sprites *sprite = loadCustomSpriteIntoSlot(addrDD_Display, addrPC_FileArchive, scratch, file);
+		*(DWORD *)(addrDD_Display + kSpriteTableOffset + (DWORD)scratch * 4) = 0;
+		*(DWORD *)paletteEntry = savedPalette;
+		if(!sprite || !jellyProbeRead((DWORD)sprite, sizeof(Sprites)))
+			continue;
+		aliases[sprite].slots = 0;
+		if(flagHintFor(file) < 0) {
+			// No ProjectX flags: animate like the sprite being replaced.
+			DWORD firstSlot = addrDD_Display + kSpriteTableOffset + (DWORD)entry.second.front() * 4;
+			Sprites *native = jellyProbeRead(firstSlot, 4) ? *(Sprites **)firstSlot : nullptr;
+			if(native && jellyProbeRead((DWORD)native, sizeof(Sprites))) {
+				sprite->flags_word10 = (WORD)((sprite->flags_word10 & ~3) | (native->flags_word10 & 3));
+				if(native->fps_wordA)
+					sprite->fps_wordA = native->fps_wordA;
+			}
+		}
+		for(int targetId : entry.second) {
+			DWORD targetSlot = addrDD_Display + kSpriteTableOffset + (DWORD)targetId * 4;
+			Sprites *original = jellyProbeRead(targetSlot, 4) ? *(Sprites **)targetSlot : nullptr;
+			if(original && jellyProbeRead((DWORD)original, sizeof(Sprites)))
+				spriteLog("SetSpriteOverride '%s' -> %d: native %d frames %dx%d flags=0x%X fps=%d, new %d frames %dx%d\n",
+					file.c_str(), targetId, original->max_frames_word16, original->width_wordC, original->height_wordE,
+					original->flags_word10, original->fps_wordA, sprite->max_frames_word16, sprite->width_wordC, sprite->height_wordE);
+			aliasIntoSlot(addrDD_Display, sprite, targetId);
+		}
+		if(aliases[sprite].slots == 0) {
+			// No target took it. Nothing reaches it through a slot any more.
+			aliases.erase(sprite);
+			spriteLog("SetSpriteOverride '%s': no valid target, sprite dropped\n", file.c_str());
+		}
 	}
 }
 
@@ -246,7 +340,31 @@ void Sprites::setSpriteOverride(int targetId, int sourceId) {
 	spriteOverrides.emplace_back(targetId, sourceId);
 }
 
-int Sprites::registerCustomSprite(std::string filename) {
+void Sprites::setSpriteOverrideFile(int targetId, std::string filename, int frames, int flags) {
+	if(targetId < kMinSpriteId || targetId > kMaxSpriteId) {
+		spriteLog("SetSpriteOverride: invalid target=%d for '%s'\n", targetId, filename.c_str());
+		return;
+	}
+	// Resolve now, while the calling package's directory is still active.
+	std::string resolved = Utils::resolveAssetPath(filename);
+	if(frames > 0)
+		frameHints[resolved] = frames;
+	if(flags >= 0)
+		flagHints[resolved] = flags;
+	for(auto &entry : fileOverrides) {
+		auto &targets = entry.second;
+		targets.erase(std::remove(targets.begin(), targets.end(), targetId), targets.end());
+	}
+	for(auto &entry : fileOverrides) {
+		if(entry.first == resolved) {
+			entry.second.push_back(targetId);
+			return;
+		}
+	}
+	fileOverrides.push_back({resolved, {targetId}});
+}
+
+int Sprites::registerCustomSprite(std::string filename, int frames, int flags) {
 	if(!Config::customSpritesEnabled) {
 		// Keep Lua initialization successful. ID 0 is the native no-op/safe
 		// fallback; no custom file is queued or loaded.
@@ -265,6 +383,10 @@ int Sprites::registerCustomSprite(std::string filename) {
 	if(resolved != filename)
 		spriteLog("registerCustomSprite: resolved '%s' -> '%s'\n", filename.c_str(), resolved.c_str());
 
+	if(frames > 0)
+		frameHints[resolved] = frames;
+	if(flags >= 0)
+		flagHints[resolved] = flags;
 	auto existing = resolvedSpriteIds.find(resolved);
 	if(existing != resolvedSpriteIds.end())
 		return existing->second;
@@ -279,6 +401,9 @@ void Sprites::resetConfig() {
 	customSprites.clear();
 	resolvedSpriteIds.clear();
 	spriteOverrides.clear();
+	fileOverrides.clear();
+	frameHints.clear();
+	flagHints.clear();
 }
 
 int (__fastcall *origLoadSprite)(DWORD DD_Display, int EDX, int palette, int id, int a4, int a5, const char *filename);
@@ -433,6 +558,64 @@ void Sprites::callDrawSpriteLocal(int posy, int layer, int posx, int sprite, int
 }
 
 
+// Reads the sprite object currently drawn for `spriteIndex`, or nullptr.
+static Sprites *spriteForDraw(int spriteIndex) {
+	DWORD ddDisplay = Game::getAddrDdDisplay();
+	if(!ddDisplay)
+		return nullptr;
+	const DWORD tables[] = {(DWORD)kSpriteTableOffset, (DWORD)kSpriteTableOffset + 0x1000};
+	for(DWORD table : tables) {
+		DWORD slot = ddDisplay + table + (DWORD)spriteIndex * 4;
+		if(!jellyProbeRead(slot, sizeof(DWORD)))
+			continue;
+		auto *sprite = *(Sprites **)slot;
+		if(sprite && jellyProbeRead((DWORD)sprite, sizeof(Sprites)))
+			return sprite;
+	}
+	return nullptr;
+}
+
+// WA takes 16.16 fixed positions and layers (the low 16 bits are masked
+// off), and the frame as an animation phase 0..0xFFFF, not an index.
+// Package code converted from ProjectX often passes pixels, small layer
+// numbers and frame indices, which all end up as 0 on WA's side. Values that
+// cannot be valid fixed-point/phase input are converted here.
+static int toFixed(double v) {
+	if(v > -65536.0 && v < 65536.0)
+		v *= 65536.0;
+	if(v > 2147483647.0)
+		v = 2147483647.0;
+	if(v < -2147483648.0)
+		v = -2147483648.0;
+	return (int)v;
+}
+
+static int toLayer(double v) {
+	return (v > -256.0 && v < 256.0) ? (int)(v * 65536.0) : (int)v;
+}
+
+static int toPhase(double f, int spriteIndex) {
+	if(!(f >= 0.0))
+		return 0;
+	if(f >= 256.0)
+		return (int)fmod(f, 65536.0); // already a phase
+	double whole = floor(f);
+	if(f != whole)
+		return (int)((f - whole) * 65536.0); // ProjectX style 0..1 animation fraction
+	int index = (int)whole;
+	Sprites *sprite = spriteForDraw(spriteIndex);
+	int frames = sprite ? sprite->max_frames_word16 : 0;
+	if(frames <= 1)
+		return 0;
+	index %= frames;
+	// A quarter into the frame's phase range picks it with and without
+	// WA's rounding (+0x8000 before the >> 16).
+	double phase = (index + 0.25) * 65536.0 / frames;
+	if(sprite->flags_word10 & 2)
+		phase /= 2; // ping-pong doubles the phase before the lookup
+	return (int)phase;
+}
+
 static void drawSpriteChecked(const char *name, sol::variadic_args &va,
                               void (*draw)(int, int, int, int, int)) {
 	static std::unordered_map<std::string, bool> reported;
@@ -456,32 +639,45 @@ static void drawSpriteChecked(const char *name, sol::variadic_args &va,
 		}
 		return;
 	}
-	int frame = (int)va[4].get<double>();
-	if(frame < 0)
-		frame = 0;
-	draw((int)va[0].get<double>(), (int)va[1].get<double>(), (int)va[2].get<double>(), sprite, frame);
+	double frame = va[4].get<double>();
+	draw(toFixed(va[0].get<double>()), toLayer(va[1].get<double>()), toFixed(va[2].get<double>()),
+		sprite, toPhase(frame, spriteIndex));
 }
 
 DWORD (__fastcall *origDestroySprite)(Sprites* sprite, int a2);
-DWORD __fastcall hookDestroySprite(Sprites* sprite, int a2) {
-	auto alias = Sprites::aliasedOriginals.find(sprite);
-	if(alias != Sprites::aliasedOriginals.end()) {
-		// First destroy frees the shared object; every later one belongs to a
-		// slot that only borrowed it, so free that slot's original instead.
-		if(Sprites::aliasedDestroyCount[sprite]++ > 0) {
-			if(alias->second.empty())
-				return 0;
-			Sprites *original = alias->second.back();
-			alias->second.pop_back();
-			if(!original)
-				return 0;
-			sprite = original;
-		}
-	}
+static DWORD destroyOneSprite(Sprites *sprite, int a2) {
 	if(Config::rendererEnabled && Renderer::isActive()) {
 		BitmapExtension::onDestroySprite(sprite);
 	}
 	return origDestroySprite(sprite, a2);
+}
+
+DWORD __fastcall hookDestroySprite(Sprites* sprite, int a2) {
+	auto alias = Sprites::aliases.find(sprite);
+	if(alias == Sprites::aliases.end())
+		return destroyOneSprite(sprite, a2);
+
+	// First destroy frees the shared object; every later one belongs to a
+	// slot that only borrowed it, so free that slot's original instead.
+	auto &info = alias->second;
+	int index = info.destroyed++;
+	Sprites *victim = sprite;
+	if(index > 0) {
+		victim = nullptr;
+		if(!info.originals.empty()) {
+			victim = info.originals.back();
+			info.originals.pop_back();
+		}
+	}
+	std::vector<Sprites *> leftovers;
+	if(info.destroyed >= info.slots) {
+		leftovers.swap(info.originals);
+		Sprites::aliases.erase(alias);
+	}
+	DWORD ret = victim ? destroyOneSprite(victim, a2) : 0;
+	for(auto *original : leftovers)
+		destroyOneSprite(original, a2);
+	return ret;
 }
 
 int Sprites::install(SignatureScanner &, module) {
@@ -502,9 +698,19 @@ int Sprites::install(SignatureScanner &, module) {
 	Hooks::polyhook("LoadSprite_OpenVfsReader", addrLoadSprite_OpenVfsReader, (DWORD *) &hookLoadSprite_OpenVfsReader, (DWORD *) &origLoadSprite_OpenVfsReader);
 
 	auto * lua = Lua::getInstance().getState();
-	lua->set_function("registerCustomSprite", &registerCustomSprite);
-	lua->set_function("SetSpriteOverride", &setSpriteOverride);
-	lua->set_function("setSpriteOverride", &setSpriteOverride);
+	lua->set_function("registerCustomSprite", [](std::string filename, sol::optional<int> frames, sol::optional<int> flags) {
+		return registerCustomSprite(filename, frames.value_or(0), flags.value_or(-1));
+	});
+	auto spriteOverrideLua = [](int targetId, sol::object source, sol::optional<int> frames, sol::optional<int> flags) {
+		if(source.is<std::string>())
+			setSpriteOverrideFile(targetId, source.as<std::string>(), frames.value_or(0), flags.value_or(-1));
+		else if(source.is<int>())
+			setSpriteOverride(targetId, source.as<int>());
+		else
+			spriteLog("SetSpriteOverride: target %d: source is neither sprite id nor file name\n", targetId);
+	};
+	lua->set_function("SetSpriteOverride", spriteOverrideLua);
+	lua->set_function("setSpriteOverride", spriteOverrideLua);
 	// Ported packages call these with 3..10 arguments in several orders. A
 	// strict int binding raises a Lua error on a short call, which aborts the
 	// rest of the package callback (weapon logic included). Draw only the

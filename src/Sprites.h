@@ -72,6 +72,11 @@ private:
 	// gets the same id no matter how many times it's registered.
 	static inline std::unordered_map<std::string, int> resolvedSpriteIds;
 	static inline std::vector<std::pair<int, int>> spriteOverrides;
+	static inline std::unordered_map<std::string, int> frameHints;
+	static inline std::unordered_map<std::string, int> flagHints;
+	// resolved image path -> target ids, in registration order
+	static inline std::vector<std::pair<std::string, std::vector<int>>> fileOverrides;
+	static void aliasIntoSlot(DWORD ddDisplay, Sprites *sprite, int targetId);
 	static inline bool hookingVfs = false;
 	static inline std::string hookingFilename;
 
@@ -84,17 +89,43 @@ public:
 
 	static void onConstructGlobalContext(int a1);
 	static int install(SignatureScanner &, module);
-	static int registerCustomSprite(std::string filename);
+	static int registerCustomSprite(std::string filename, int frames = 0, int flags = -1);
 	static void setSpriteOverride(int targetId, int sourceId);
 	static void resetConfig();
 	static void callDrawSpriteLocal(int posy, int layer, int posx, int sprite, int frame);
 	static void callDrawSpriteGlobal(int posy, int layer, int posx, int sprite, int frame);
 
-	// An override makes two table slots point at the same sprite object. WA
-	// destroys every slot on teardown, so each extra destroy of an aliased
-	// source is redirected to the target slot's displaced original instead.
-	static inline std::unordered_map<Sprites *, std::vector<Sprites *>> aliasedOriginals;
-	static inline std::unordered_map<Sprites *, int> aliasedDestroyCount;
+	// ProjectX SetSpriteOverride(id, LoadSprite(file)): the image never needs a
+	// custom id of its own, so it does not eat the small 851..1023 range.
+	static void setSpriteOverrideFile(int targetId, std::string filename, int frames = 0, int flags = -1);
+	// ProjectX LoadSprite(file, frames, ...) frame count, keyed by resolved path.
+	static int frameHintFor(const std::string &resolved) {
+		auto it = frameHints.find(resolved);
+		return it == frameHints.end() ? 0 : it->second;
+	}
+	// ProjectX LoadSprite flags: bit 0 loops the animation, bit 1 ping-pongs.
+	// They are the same bits WA keeps in the sprite's flags word.
+	static int flagHintFor(const std::string &resolved) {
+		auto it = flagHints.find(resolved);
+		return it == flagHints.end() ? -1 : it->second;
+	}
+
+	static void beginVfsHook(const std::string &filename) { hookingFilename = filename; hookingVfs = true; }
+	static void endVfsHook() { hookingVfs = false; }
+	static int loadSpriteNative(DWORD ddDisplay, int palette, int id, DWORD fileArchive, const char *filename) {
+		return hookLoadSprite(ddDisplay, 0, palette, id, 0, (int)fileArchive, filename);
+	}
+
+	// An override makes several table slots point at the same sprite object.
+	// WA destroys every slot on teardown, so each extra destroy of an aliased
+	// sprite is redirected to a displaced original, and whatever originals
+	// remain after the last slot's destroy are freed then.
+	struct AliasInfo {
+		int slots = 0;
+		int destroyed = 0;
+		std::vector<Sprites *> originals;
+	};
+	static inline std::unordered_map<Sprites *, AliasInfo> aliases;
 };
 
 
