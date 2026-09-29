@@ -89,6 +89,12 @@ public:
 	static void resetConfig();
 	static void callDrawSpriteLocal(int posy, int layer, int posx, int sprite, int frame);
 	static void callDrawSpriteGlobal(int posy, int layer, int posx, int sprite, int frame);
+
+	// An override makes two table slots point at the same sprite object. WA
+	// destroys every slot on teardown, so each extra destroy of an aliased
+	// source is redirected to the target slot's displaced original instead.
+	static inline std::unordered_map<Sprites *, std::vector<Sprites *>> aliasedOriginals;
+	static inline std::unordered_map<Sprites *, int> aliasedDestroyCount;
 };
 
 

@@ -210,6 +210,8 @@ void Sprites::onConstructGlobalContext(int a1) {
 
 	// ProjectX weapons keep fixed sprite slot numbers in WeaponStruct. Redirect
 	// those slots to the decoded package art after all custom sprites exist.
+	aliasedOriginals.clear();
+	aliasedDestroyCount.clear();
 	for(const auto &overridePair : spriteOverrides) {
 		int targetId = overridePair.first;
 		int sourceId = overridePair.second;
@@ -225,7 +227,11 @@ void Sprites::onConstructGlobalContext(int a1) {
 			spriteLog("SetSpriteOverride: source %d unreadable for target %d\n", sourceId, targetId);
 			continue;
 		}
+		Sprites *original = jellyProbeRead(targetSlot, sizeof(DWORD)) ? *(Sprites **)targetSlot : nullptr;
+		if(original == source)
+			continue;
 		*(Sprites **)targetSlot = source;
+		aliasedOriginals[source].push_back(original);
 		spriteLog("SetSpriteOverride: target %d -> source %d ptr=0x%X\n", targetId, sourceId, (DWORD)source);
 	}
 }
@@ -427,8 +433,51 @@ void Sprites::callDrawSpriteLocal(int posy, int layer, int posx, int sprite, int
 }
 
 
+static void drawSpriteChecked(const char *name, sol::variadic_args &va,
+                              void (*draw)(int, int, int, int, int)) {
+	static std::unordered_map<std::string, bool> reported;
+	int count = (int)va.size();
+	bool ok = count >= 5;
+	for(int i = 0; ok && i < 5; i++)
+		ok = va[i].get_type() == sol::type::number;
+	int sprite = ok ? (int)va[3].get<double>() : 0;
+	int spriteIndex = sprite & 0xFFFF;
+	if(ok && (spriteIndex < kMinSpriteId || spriteIndex > kMaxSpriteId))
+		ok = false;
+	if(!ok) {
+		std::string key = std::string(name) + "/" + std::to_string(count) + "/" + std::to_string(sprite);
+		if(!reported[key]) {
+			reported[key] = true;
+			std::string types;
+			for(int i = 0; i < count; i++)
+				types += std::string(i ? "," : "") + sol::type_name(va.lua_state(), va[i].get_type());
+			spriteLog("%s: skipped non-canonical call (%d args: %s, sprite=%d); expected (posy, layer, posx, sprite, frame)\n",
+				name, count, types.c_str(), sprite);
+		}
+		return;
+	}
+	int frame = (int)va[4].get<double>();
+	if(frame < 0)
+		frame = 0;
+	draw((int)va[0].get<double>(), (int)va[1].get<double>(), (int)va[2].get<double>(), sprite, frame);
+}
+
 DWORD (__fastcall *origDestroySprite)(Sprites* sprite, int a2);
 DWORD __fastcall hookDestroySprite(Sprites* sprite, int a2) {
+	auto alias = Sprites::aliasedOriginals.find(sprite);
+	if(alias != Sprites::aliasedOriginals.end()) {
+		// First destroy frees the shared object; every later one belongs to a
+		// slot that only borrowed it, so free that slot's original instead.
+		if(Sprites::aliasedDestroyCount[sprite]++ > 0) {
+			if(alias->second.empty())
+				return 0;
+			Sprites *original = alias->second.back();
+			alias->second.pop_back();
+			if(!original)
+				return 0;
+			sprite = original;
+		}
+	}
 	if(Config::rendererEnabled && Renderer::isActive()) {
 		BitmapExtension::onDestroySprite(sprite);
 	}
@@ -456,8 +505,13 @@ int Sprites::install(SignatureScanner &, module) {
 	lua->set_function("registerCustomSprite", &registerCustomSprite);
 	lua->set_function("SetSpriteOverride", &setSpriteOverride);
 	lua->set_function("setSpriteOverride", &setSpriteOverride);
-	lua->set_function("drawSpriteLocal", &callDrawSpriteLocal);
-	lua->set_function("drawSpriteGlobal", &callDrawSpriteGlobal);
+	// Ported packages call these with 3..10 arguments in several orders. A
+	// strict int binding raises a Lua error on a short call, which aborts the
+	// rest of the package callback (weapon logic included). Draw only the
+	// canonical (posy, layer, posx, sprite, frame[, ignored...]) form and log
+	// every other shape once instead of throwing.
+	lua->set_function("drawSpriteLocal", [](sol::variadic_args va) { drawSpriteChecked("drawSpriteLocal", va, &callDrawSpriteLocal); });
+	lua->set_function("drawSpriteGlobal", [](sol::variadic_args va) { drawSpriteChecked("drawSpriteGlobal", va, &callDrawSpriteGlobal); });
 	return 0;
 }
 
