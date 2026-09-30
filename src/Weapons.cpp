@@ -12,8 +12,11 @@
 #include "PxWeaponArt.h"
 #include <unordered_map>
 
-static void logFiredWeapon(CustomWeapons::WeaponStruct *ws);
-static void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile);
+// noinline: hookFireWeapon reads eax/ecx with inline asm as its first
+// statements. Inlining this helper (it has a stack buffer) makes MSVC add a
+// /GS cookie to the hook prologue, which overwrites eax before it is read.
+static __declspec(noinline) void logFiredWeapon(CustomWeapons::WeaponStruct *ws);
+static __declspec(noinline) void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile);
 
 
 
@@ -123,7 +126,7 @@ static void describeSprite(DWORD sprite, char *out, size_t outSize) {
 	sprintf_s(out, outSize, "id=%u flags=0x%X spr=0x%X alt=0x%X frames=%u", id, sprite & 0xFFFF0000, primary, alternate, frames);
 }
 
-static void logFiredWeapon(CustomWeapons::WeaponStruct *ws) {
+static __declspec(noinline) void logFiredWeapon(CustomWeapons::WeaponStruct *ws) {
 	if(!ws || projectileDiagLines >= kProjectileDiagMax || !jellyProbeRead((DWORD)ws, sizeof(CustomWeapons::WeaponStruct)))
 		return;
 	const int *f = reinterpret_cast<const int *>(ws);
@@ -136,7 +139,7 @@ static void logFiredWeapon(CustomWeapons::WeaponStruct *ws) {
 		f[0xA4 / 4], f[0xAC / 4], f[0x124 / 4], f[0x128 / 4], f[0x170 / 4], spr);
 }
 
-static void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile) {
+static __declspec(noinline) void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile) {
 	if(projectileDiagLines >= kProjectileDiagMax)
 		return;
 	projectileDiagLines++;
