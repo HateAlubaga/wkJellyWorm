@@ -92,7 +92,7 @@ public:
 	static int registerCustomSprite(std::string filename, int frames = 0, int flags = -1);
 	// Like registerCustomSprite, but only takes a new id while more than
 	// `reserve` ids of the 851..1023 range stay free. Returns 0 otherwise.
-	static int registerCustomSpriteWithReserve(const std::string &filename, int reserve);
+	static int registerCustomSpriteWithReserve(const std::string &filename, int reserve, int frames = 0);
 	static int customSpriteIdsLeft();
 	static void setSpriteOverride(int targetId, int sourceId);
 	static void resetConfig();

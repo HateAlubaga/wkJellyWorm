@@ -19,6 +19,8 @@ namespace PxWeaponArt {
 
 	struct Art {
 		std::string slotFiles[3]; // resolved image per kSlotOffsets entry, empty = keep
+		int slotFrames[3] = {0, 0, 0};              // frame count hint, 0 = deduce
+		bool slotForced[3] = {false, false, false}; // replace the slot whatever it holds
 		std::string aimFile;      // resolved worm aim image, empty = none
 		std::string iconFile;     // resolved weapon panel icon, empty = none
 		std::string trailerName;  // weapon name as ProjectX spelled it

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <vector>
 
 #include "CustomWeapons.h"
@@ -196,6 +197,91 @@ std::string resolveExisting(const std::filesystem::path &packageDir, const std::
 	return findInStockArt(packageDir, file);
 }
 
+// assets/_baked/bake.txt, written by pxbake.py: art that ProjectX's
+// p_sprite_builder composed at runtime (the weapon rotated in the worm's
+// hands, projectiles turned to their flight direction), pre-rendered into
+// strips WA picks frames from. Lines are kind<TAB>weapon name<TAB>file<TAB>frames;
+// file is relative to assets/, or "=name" for an image used as it is.
+struct Baked {
+	std::string aim;
+	std::string proj;
+	int projFrames = 0;
+};
+
+// ProjectX names sometimes carry a trailing space ("Homing Arrow ").
+std::string bakedKey(const std::string &name) {
+	size_t first = name.find_first_not_of(" \t");
+	if(first == std::string::npos)
+		return {};
+	return lower(name.substr(first, name.find_last_not_of(" \t") - first + 1));
+}
+
+const std::map<std::string, Baked> &bakedFor(const std::filesystem::path &packageDir) {
+	static std::map<std::string, std::map<std::string, Baked>> cache;
+	auto hit = cache.find(packageDir.string());
+	if(hit != cache.end())
+		return hit->second;
+	auto &out = cache[packageDir.string()];
+	std::ifstream in(packageDir / "assets" / "_baked" / "bake.txt");
+	std::string line;
+	while(std::getline(in, line)) {
+		if(!line.empty() && line.back() == '\r')
+			line.pop_back();
+		if(line.empty() || line[0] == '#')
+			continue;
+		std::vector<std::string> parts;
+		size_t start = 0;
+		for(size_t tab; (tab = line.find('\t', start)) != std::string::npos; start = tab + 1)
+			parts.push_back(line.substr(start, tab - start));
+		parts.push_back(line.substr(start));
+		if(parts.size() < 3)
+			continue;
+		std::string file;
+		if(!parts[2].empty() && parts[2][0] == '=')
+			file = resolveExisting(packageDir, parts[2].substr(1));
+		else {
+			std::error_code ec;
+			auto path = packageDir / "assets" / parts[2];
+			if(std::filesystem::is_regular_file(path, ec) && !ec)
+				file = path.string();
+		}
+		if(file.empty()) {
+			PxWeaponArt::log("bake.txt: '%s' for '%s' not found\n", parts[2].c_str(), parts[1].c_str());
+			continue;
+		}
+		Baked &b = out[bakedKey(parts[1])];
+		if(parts[0] == "aim")
+			b.aim = file;
+		else if(parts[0] == "proj") {
+			b.proj = file;
+			b.projFrames = parts.size() > 3 ? atoi(parts[3].c_str()) : 0;
+		}
+	}
+	return out;
+}
+
+bool applyBaked(const std::filesystem::path &packageDir, const std::string &name, PxWeaponArt::Art &art) {
+	if(name.empty())
+		return false;
+	const auto &baked = bakedFor(packageDir);
+	auto it = baked.find(bakedKey(name));
+	if(it == baked.end())
+		return false;
+	if(!it->second.aim.empty()) {
+		art.aimFile = it->second.aim;
+		PxWeaponArt::log("%s: baked aim '%s'\n", name.c_str(), art.aimFile.c_str());
+	}
+	if(!it->second.proj.empty()) {
+		// ProjectX hid WA's own projectile sprite (launch.anim.spriteIndex = 0)
+		// and drew this image instead, so it replaces whatever slot 0x60 holds.
+		art.slotFiles[0] = it->second.proj;
+		art.slotFrames[0] = it->second.projFrames;
+		art.slotForced[0] = true;
+		PxWeaponArt::log("%s: baked projectile '%s' (%d frames)\n", name.c_str(), art.slotFiles[0].c_str(), art.slotFrames[0]);
+	}
+	return true;
+}
+
 } // namespace
 
 bool PxWeaponArt::find(const int *fields, size_t structSize, const std::string &name1, Art &art) {
@@ -207,7 +293,7 @@ bool PxWeaponArt::find(const int *fields, size_t structSize, const std::string &
 	fs::path rawDir = packageDir / "weapons_raw";
 	std::error_code ec;
 	if(!fs::is_directory(rawDir, ec) || ec)
-		return false;
+		return applyBaked(packageDir, name1, art);
 
 	fs::path bestPath;
 	Trailer bestTrailer;
@@ -237,7 +323,8 @@ bool PxWeaponArt::find(const int *fields, size_t structSize, const std::string &
 		if(bestScore >= 0)
 			PxWeaponArt::log("%s: no confident weapons_raw match (best %.2f '%s'); art left as registered\n",
 				name1.c_str(), bestScore, bestPath.filename().string().c_str());
-		return false;
+		// Baked art is keyed by weapon name, not by the struct match.
+		return applyBaked(packageDir, name1, art);
 	}
 	PxWeaponArt::log("%s: matched %s (%.2f)\n", name1.c_str(), bestPath.filename().string().c_str(), bestScore);
 
@@ -259,6 +346,8 @@ bool PxWeaponArt::find(const int *fields, size_t structSize, const std::string &
 		if(art.aimFile.empty() && !bestTrailer.aim.empty())
 			PxWeaponArt::log("%s: aim image '%s' not found\n", name1.c_str(), bestTrailer.aim.c_str());
 	}
+	if(!applyBaked(packageDir, bestTrailer.name1, art))
+		applyBaked(packageDir, name1, art);
 	return true;
 }
 
@@ -280,9 +369,13 @@ void CustomWeapons::assignPxArt() {
 		for(int i = 0; i < 3; i++) {
 			const std::string &file = entry.second.slotFiles[i];
 			int &slot = fields[PxWeaponArt::kSlotOffsets[i] / 4];
-			if(file.empty() || slot != PxWeaponArt::kSpriteFromFile)
+			// Render mode 3 draws sprite id + speed step (up to +3), which for a
+			// custom id lands on unrelated sprites; leave a working native id alone.
+			int mode = fields[PxWeaponArt::kSlotOffsets[i] / 4 + 1];
+			bool forced = entry.second.slotForced[i] && mode != 3;
+			if(file.empty() || (slot != PxWeaponArt::kSpriteFromFile && !forced))
 				continue;
-			int id = Sprites::registerCustomSpriteWithReserve(file, reserve);
+			int id = Sprites::registerCustomSpriteWithReserve(file, reserve, entry.second.slotFrames[i]);
 			if(id > 0) {
 				slot = id;
 				projectiles++;
