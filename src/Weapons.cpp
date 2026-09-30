@@ -102,6 +102,11 @@ CTaskMissile *__fastcall Weapons::hookCreateWeaponProjectile(CGameTask *This, in
 // ---------------------------------------------------------------------------
 static int projectileDiagLines = 0;
 static const int kProjectileDiagMax = 400;
+// Draws logged per missile address. WA reuses a freed missile's memory for
+// the next one, so the count is cleared whenever a projectile is created;
+// otherwise a Bible fired after a Grenade at the same address logged no draw
+// at all and looked invisible.
+static std::unordered_map<DWORD, int> missileRenderSeen;
 
 static DWORD readDword(DWORD addr) {
 	if(!addr || !jellyProbeRead(addr, sizeof(DWORD)))
@@ -140,6 +145,7 @@ static __declspec(noinline) void logFiredWeapon(CustomWeapons::WeaponStruct *ws)
 }
 
 static __declspec(noinline) void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile) {
+	missileRenderSeen.erase((DWORD)missile);
 	if(projectileDiagLines >= kProjectileDiagMax)
 		return;
 	projectileDiagLines++;
@@ -153,7 +159,6 @@ static __declspec(noinline) void logCreatedProjectile(Weapons::WeaponProjectileP
 // WA's missile draw (0x5091A0): __stdcall, one argument (the missile), no
 // register inputs. Logs the first two draws of each missile, then passes on.
 static void (__stdcall *origMissileRender)(DWORD missile);
-static std::unordered_map<DWORD, int> missileRenderSeen;
 static void __stdcall hookMissileRender(DWORD m) {
 	if(projectileDiagLines < kProjectileDiagMax && m && jellyProbeRead(m, 0x3F0)) {
 		if(missileRenderSeen.size() > 4096)
