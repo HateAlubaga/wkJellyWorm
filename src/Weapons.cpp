@@ -8,6 +8,12 @@
 #include <sol/sol.hpp>
 #include "packages/PackageManager.h"
 #include "entities/gametasks/CTaskMissile.h"
+#include "MemAccess.h"
+#include "PxWeaponArt.h"
+#include <unordered_map>
+
+static void logFiredWeapon(CustomWeapons::WeaponStruct *ws);
+static void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile);
 
 
 
@@ -60,6 +66,7 @@ int __stdcall Weapons::hookFireWeapon(CTaskWorm *worm) {
 	_asm mov weaponstruct, eax
 	_asm mov launchparams, ecx
 
+	logFiredWeapon(weaponstruct);
 	int ret = PackageManager::getInstance().handleFireWeapon(worm, weaponstruct, launchparams);
 	if(ret) return ret;
 
@@ -76,7 +83,95 @@ CTaskMissile *(__fastcall *origCreateWeaponProjectile)(CGameTask *This, int EDX,
 CTaskMissile *__fastcall Weapons::hookCreateWeaponProjectile(CGameTask *This, int EDX, WeaponProjectileParams * projectileParams, WeaponLaunchParams * launchParams) {
 	int ret = PackageManager::getInstance().handleCreateWeaponProjectile(This, projectileParams, launchParams);
 	if(ret) return 0;
-	return origCreateWeaponProjectile(This, EDX, projectileParams, launchParams);
+	CTaskMissile *missile = origCreateWeaponProjectile(This, EDX, projectileParams, launchParams);
+	logCreatedProjectile(projectileParams, missile);
+	return missile;
+}
+
+// ---------------------------------------------------------------------------
+// Projectile sprite diagnostics (jelly\pxweapons.log).
+//
+// Custom weapons whose projectile slot holds a custom sprite id (851+) fire
+// fine but nothing is drawn, while the same ids work as worm aim poses. The
+// static path (WeaponStruct+0x60 -> missile+0x2EC -> render 0x5091A0 ->
+// display vtable+0x4C) says they should draw, so log what the game actually
+// holds at each step. Capped so a long match cannot grow the log unbounded.
+// ---------------------------------------------------------------------------
+static int projectileDiagLines = 0;
+static const int kProjectileDiagMax = 400;
+
+static DWORD readDword(DWORD addr) {
+	if(!addr || !jellyProbeRead(addr, sizeof(DWORD)))
+		return 0xDEADDEAD;
+	return *(DWORD *)addr;
+}
+
+// Sprite table entry for `sprite` (flags stripped): object pointer and its
+// frame count; spr=0 and alt=0 means WA has nothing to draw for that id.
+static void describeSprite(DWORD sprite, char *out, size_t outSize) {
+	DWORD id = sprite & 0xFFFF;
+	DWORD display = Game::getAddrDdDisplay();
+	if(!display || id < 1 || id > 0x3FF) {
+		sprintf_s(out, outSize, "id=%u (outside sprite table)", id);
+		return;
+	}
+	DWORD primary = readDword(display + 0x1008 + id * 4);
+	DWORD alternate = readDword(display + 0x2008 + id * 4);
+	WORD frames = 0;
+	if(primary && primary != 0xDEADDEAD && jellyProbeRead(primary + 0x16, sizeof(WORD)))
+		frames = *(WORD *)(primary + 0x16);
+	sprintf_s(out, outSize, "id=%u flags=0x%X spr=0x%X alt=0x%X frames=%u", id, sprite & 0xFFFF0000, primary, alternate, frames);
+}
+
+static void logFiredWeapon(CustomWeapons::WeaponStruct *ws) {
+	if(!ws || projectileDiagLines >= kProjectileDiagMax || !jellyProbeRead((DWORD)ws, sizeof(CustomWeapons::WeaponStruct)))
+		return;
+	const int *f = reinterpret_cast<const int *>(ws);
+	const char *name = (ws->name1 && jellyProbeRead((DWORD)ws->name1, 1)) ? ws->name1 : "?";
+	char spr[160];
+	describeSprite((DWORD)f[0x60 / 4], spr, sizeof(spr));
+	projectileDiagLines++;
+	PxWeaponArt::log("fire '%s' ws=0x%X type=%d/%d/%d/%d 5C=%d 60=%d 64=%d A4=%d AC=%d 124=%d 128=%d 170=%d | %s\n",
+		name, (DWORD)ws, f[0x30 / 4], f[0x34 / 4], f[0x38 / 4], f[0x3C / 4], f[0x5C / 4], f[0x60 / 4], f[0x64 / 4],
+		f[0xA4 / 4], f[0xAC / 4], f[0x124 / 4], f[0x128 / 4], f[0x170 / 4], spr);
+}
+
+static void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile) {
+	if(projectileDiagLines >= kProjectileDiagMax)
+		return;
+	projectileDiagLines++;
+	DWORD m = (DWORD)missile;
+	DWORD p = (DWORD)params;
+	PxWeaponArt::log("  projectile params=0x%X [+0C]=%d [+20]=%d [+24]=%d [+28]=%d -> missile=0x%X +2E8=%d +2EC=%d +2F0=%d +330=%d +338=%d\n",
+		p, (int)readDword(p + 0x0C), (int)readDword(p + 0x20), (int)readDword(p + 0x24), (int)readDword(p + 0x28),
+		m, (int)readDword(m + 0x2E8), (int)readDword(m + 0x2EC), (int)readDword(m + 0x2F0), (int)readDword(m + 0x330), (int)readDword(m + 0x338));
+}
+
+// WA's missile draw (0x5091A0): __stdcall, one argument (the missile), no
+// register inputs. Logs the first two draws of each missile, then passes on.
+static void (__stdcall *origMissileRender)(DWORD missile);
+static std::unordered_map<DWORD, int> missileRenderSeen;
+static void __stdcall hookMissileRender(DWORD m) {
+	if(projectileDiagLines < kProjectileDiagMax && m && jellyProbeRead(m, 0x3F0)) {
+		if(missileRenderSeen.size() > 4096)
+			missileRenderSeen.clear();
+		int &seen = missileRenderSeen[m];
+		if(seen < 2) {
+			seen++;
+			projectileDiagLines++;
+			bool alt = readDword(m + 0x100) != 0;
+			DWORD block = m + (alt ? 0x334 : 0x2E8);
+			DWORD sprite = readDword(block + 4);
+			DWORD spriteOverride = readDword(m + 0x3A4) ? readDword(m + 0x368) : 0;
+			char spr[160];
+			describeSprite(spriteOverride ? spriteOverride : sprite, spr, sizeof(spr));
+			PxWeaponArt::log("  draw missile=0x%X block=+%X sprite=%d mode=%d +330=%d +3A4=%d +368=%d +3E8=0x%X +B0=%d +A4=%d pos=%d,%d | %s\n",
+				m, alt ? 0x334 : 0x2E8, (int)sprite, (int)readDword(block + 8), (int)readDword(m + 0x330),
+				(int)readDword(m + 0x3A4), (int)readDword(m + 0x368), readDword(m + 0x3E8), (int)readDword(m + 0xB0),
+				(int)readDword(m + 0xA4), (int)readDword(m + 0x84) >> 16, (int)readDword(m + 0x88) >> 16, spr);
+		}
+	}
+	origMissileRender(m);
 }
 
 CTaskMissile* Weapons::callCreateWeaponProjectile(CGameTask * This, WeaponProjectileParams * projectileParams, WeaponLaunchParams * launchParams) {
@@ -117,6 +212,8 @@ int Weapons::install(SignatureScanner &, module) {
 	Hooks::polyhook("WormStartFiring", addrWormStartFiringWeapon, (DWORD *) &hookWormStartFiringWeapon, (DWORD *) &origWormStartFiringWeapon);
 	Hooks::polyhook("FireWeapon", addrFireWeapon, (DWORD *) &hookFireWeapon, (DWORD *) &origFireWeapon);
 	Hooks::polyhook("CreateWeaponProjectile", addrCreateWeaponProjectile, (DWORD *) &hookCreateWeaponProjectile, (DWORD *) &origCreateWeaponProjectile);
+	DWORD addrMissileRender = Hooks::scanPattern("MissileRender", "\x83\xEC\x20\x53\x8B\x5C\x24\x28\x83\xBB\x00\x01\x00\x00\x00\x8B\x83\xC8\x03\x00\x00\x55\x56\x57\x89\x44\x24\x20\x8D\xB3\xE8\x02\x00\x00", "??????xxxxxxxxxxxxxxxxxxxxxxxxxxxx", 0x5091A0);
+	Hooks::polyhook("MissileRender", addrMissileRender, (DWORD *) &hookMissileRender, (DWORD *) &origMissileRender);
 
 
 	auto * lua = Lua::getInstance().getState();
