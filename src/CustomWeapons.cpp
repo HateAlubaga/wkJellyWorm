@@ -536,7 +536,11 @@ DWORD __stdcall CustomWeapons::getImgPtr(int weapon_panel_obj, int weapon_id, in
 	return weaponImgInjectionList[custom_weapon_id].second;
 }
 
-static DWORD getWormSwitchingWeaponImgPtr(int weapon_panel_obj, int weapon_id, int a4) {
+// Called from the naked hookWormSwitchingWeapon_GetImgPtr_patch1, which pushes
+// three arguments and never pops them: must be __stdcall (callee cleans), or
+// the worm frame function 0x515650 returns with esp 12 bytes off and WA later
+// crashes writing team stats at 0x515724.
+static DWORD __stdcall getWormSwitchingWeaponImgPtr(int weapon_panel_obj, int weapon_id, int a4) {
 	if(weapon_id >= CustomWeapons::maxStandardWeapons)
 		return getStandardImgPtr(weapon_panel_obj, 1, a4);
 	return getStandardImgPtr(weapon_panel_obj, weapon_id, a4);

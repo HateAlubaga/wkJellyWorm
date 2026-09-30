@@ -151,14 +151,12 @@ bool sameAssetName(const std::string &a, const std::string &b) {
 	return norm(a) == norm(b);
 }
 
-// ProjectX libraries such as cweps keep their art in a companion "<name>_gfx"
-// library (cweps_gfx), which px2jelly converted into a separate package.
-std::string findInGfxCompanion(const std::filesystem::path &packageDir, const std::string &file) {
+// Looks for `file` in <packageRoot>/<any version>/assets.
+std::string findInPackageAssets(const std::filesystem::path &packageRoot, const std::string &file) {
 	namespace fs = std::filesystem;
 	std::string bare = fs::path(file).filename().string();
-	fs::path companion = packageDir.parent_path().parent_path() / (packageDir.parent_path().filename().string() + "_gfx");
 	std::error_code ec;
-	for(fs::directory_iterator ver(companion, fs::directory_options::skip_permission_denied, ec), end;
+	for(fs::directory_iterator ver(packageRoot, fs::directory_options::skip_permission_denied, ec), end;
 		!ec && ver != end; ver.increment(ec)) {
 		std::error_code ec2;
 		for(fs::directory_iterator it(ver->path() / "assets", fs::directory_options::skip_permission_denied, ec2), end2;
@@ -170,6 +168,20 @@ std::string findInGfxCompanion(const std::filesystem::path &packageDir, const st
 	return {};
 }
 
+// ProjectX libraries such as cweps keep their art in a companion "<name>_gfx"
+// library (cweps_gfx), which px2jelly converted into a separate package.
+std::string findInGfxCompanion(const std::filesystem::path &packageDir, const std::string &file) {
+	return findInPackageAssets(packageDir.parent_path().parent_path() / (packageDir.parent_path().filename().string() + "_gfx"), file);
+}
+
+// ProjectX's stock art (def_shot_aim_p.png, def_put_p.png, ...) lived in the
+// engine, not in each library; px2jelly extracted it once into this package.
+// Weapons whose trailer names a stock aim image otherwise get no aim sprite
+// and the worm holding them is not drawn.
+std::string findInStockArt(const std::filesystem::path &packageDir, const std::string &file) {
+	return findInPackageAssets(packageDir.parent_path().parent_path() / "p_sprite_builder_graphics", file);
+}
+
 std::string resolveExisting(const std::filesystem::path &packageDir, const std::string &file) {
 	if(file.empty())
 		return {};
@@ -177,7 +189,10 @@ std::string resolveExisting(const std::filesystem::path &packageDir, const std::
 	std::error_code ec;
 	if(std::filesystem::is_regular_file(resolved, ec) && !ec)
 		return resolved;
-	return findInGfxCompanion(packageDir, file);
+	resolved = findInGfxCompanion(packageDir, file);
+	if(!resolved.empty())
+		return resolved;
+	return findInStockArt(packageDir, file);
 }
 
 } // namespace
