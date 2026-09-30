@@ -1,5 +1,7 @@
 #include "Lobby.h"
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 #include <MinHook.h>
 #include <json.hpp>
 #include "packages/PackageManager.h"
@@ -14,19 +16,34 @@
 namespace {
 	constexpr int kLobbyDisplayMsgOffset = 0x10318;
 	std::string pendingClientCapsJson;
-	// KNOWN ISSUE (do not "fix" by chunking -- that was tried and made things
-	// worse): addrLobbySendGreentext (WA @0x4AA990) memcpy()s the whole
-	// "nickname + sep + msg" string into a fixed global buffer at 0x8C22CA
-	// (WA @0x4AA930 -> CRT memcpy @0x5DC530) with no bounds check. The next
-	// referenced global sits at 0x8C2424, so usable capacity is only ~346
-	// bytes. sendConfigString's JSON exceeds that once enough packages are
-	// enabled, smearing adjacent globals -- that is the 0xc0000005 crash seen
-	// during multiplayer lobby team setup, where the faulting pointer decoded
-	// to ASCII "auth" (bytes from the config's own "authorName" field).
-	// Splitting it into small reassembled chunks avoided the overflow but
-	// broke sprite rendering game-wide for reasons not yet understood, so the
-	// original single-message behaviour is kept until there is a transport
-	// that is actually understood. Affects multiplayer lobby only.
+	// addrLobbySendGreentext (WA @0x4AA990) builds "SYS:<nick>:ALL:<msg>" and
+	// hands it to WA @0x4AA930, which memcpy()s it into a fixed global packet
+	// buffer (u16 0, then the text at 0x8C22CA) with no bounds check. The next
+	// global sits at 0x8C2424, so only ~346 bytes fit. sendConfigString's JSON
+	// is several KB once enough packages are enabled: it ran over the CRT's
+	// globals up to __piob (0x8C3130), and WA then crashed at exit in the CRT
+	// stream flush (WA @0x5E3591) reading __piob as ASCII -- "auth" or "rue,"
+	// from the config text. Long messages therefore bypass that buffer:
+	// sendGreentextSafe builds the same packet on the heap and sends it through
+	// the call 0x4AA930 would have made. The bytes sent are unchanged, so peers
+	// receive exactly what they received before. (Chunking the message was
+	// tried earlier and broke sprite rendering for reasons never understood.)
+	constexpr size_t kWaGreentextPacketMax = 256; // conservative vs the 0x15C bytes available
+	DWORD addrNetBroadcastObj = 0; // WA @0x7C0ED4, operand at 0x4AA970
+	DWORD addrNetBroadcast = 0;    // WA @0x58F8E0: eax=obj, (buf, len), ret 8
+
+	int callNetBroadcast(const char *buf, int len) {
+		DWORD fn = addrNetBroadcast, obj = addrNetBroadcastObj;
+		int result;
+		_asm {
+			push len
+			push buf
+			mov eax, obj
+			call fn
+			mov result, eax
+		}
+		return result;
+	}
 }
 
 
@@ -164,7 +181,7 @@ void Lobby::sendGreenTextMe(void *This, std::string msg) {
 	std::string buff = (char*)addrMyNickname;
 	buff += " ";
 	buff += msg;
-	addrLobbySendGreentext((char*)buff.c_str(), 0, This, 0, 0);
+	sendGreentextSafe(This, buff);
 }
 
 void Lobby::sendGreenTextSystem(void *This, std::string msg) {
@@ -172,7 +189,30 @@ void Lobby::sendGreenTextSystem(void *This, std::string msg) {
 		printf("sendGreenTextSystem: invalid lobby obj %p (msg len=%zu)\n", This, msg.size());
 		return;
 	}
-	addrLobbySendGreentext((char*)msg.c_str(), 0, This, 0, 0);
+	sendGreentextSafe(This, msg);
+}
+
+// addrLobbySendGreentext(msg, 0, This, 0, 0), minus WA's fixed packet buffer
+// for messages that would not fit in it (see the note at the top).
+void Lobby::sendGreentextSafe(void *This, const std::string &msg) {
+	std::string text = "SYS:";
+	text += (const char *)addrMyNickname;
+	text += ":ALL:";
+	text += msg;
+	if(text.size() + 3 <= kWaGreentextPacketMax) {
+		addrLobbySendGreentext((char *)msg.c_str(), 0, This, 0, 0);
+		return;
+	}
+	if(!addrNetBroadcast || !addrNetBroadcastObj) {
+		printf("sendGreentextSafe: %zu-byte message dropped; WA's greentext buffer holds %zu and the broadcast call was not found\n",
+			text.size(), kWaGreentextPacketMax);
+		return;
+	}
+	// Packet layout from WA @0x4AA930: u16 0, the text, its NUL.
+	std::vector<char> packet(2 + text.size() + 1, 0);
+	memcpy(packet.data() + 2, text.c_str(), text.size() + 1);
+	callNetBroadcast(packet.data(), (int)packet.size());
+	hookLobbyDisplayMessage((int)This + kLobbyDisplayMsgOffset, (char *)text.c_str());
 }
 
 void Lobby::showGreenText(void *This, std::string msg) {
@@ -380,6 +420,19 @@ int Lobby::install(SignatureScanner & signatureScanner, module mod) {
 			(void (__fastcall *)(char*,void *,void *,int, int))
 			Hooks::scanPattern("LobbySendGreentext", "\x6A\xFF\x68\x00\x00\x00\x00\x64\xA1\x00\x00\x00\x00\x50\x64\x89\x25\x00\x00\x00\x00\x51\x56\x57\x8B\xF1\x68\x00\x00\x00\x00\x8D\x4C\x24\x0C\xE8\x00\x00\x00\x00\x80\x7C\x24\x00\x00", "???????xx????xxxx????xxxxxx????xxxxx????xxx??", 0x4AA990);
 	addrMyNickname = *(DWORD*)((DWORD)addrLobbySendGreentext + 0x4D);
+
+	// WA @0x4AA930, the packet builder right before LobbySendGreentext:
+	//   +0x15 push <packet text buffer>   +0x40 mov eax, <net object>
+	//   +0x45 call <broadcast>            +0x5C ret 4
+	// Only trust the operands while the bytes still look like that.
+	const BYTE *packetFn = (const BYTE *)((DWORD)addrLobbySendGreentext - 0x60);
+	if(packetFn[0x15] == 0x68 && packetFn[0x40] == 0xB8 && packetFn[0x45] == 0xE8
+		&& packetFn[0x5C] == 0xC2 && packetFn[0x5D] == 0x04) {
+		addrNetBroadcastObj = *(const DWORD *)(packetFn + 0x41);
+		addrNetBroadcast = (DWORD)(packetFn + 0x4A) + *(const int *)(packetFn + 0x46);
+	} else {
+		printf("Lobby: greentext packet builder not recognised; long lobby messages will be dropped\n");
+	}
 
 	Hooks::polyhook("LobbyHostCommands", addrLobbyHostCommands, (DWORD *) &hookLobbyHostCommands, (DWORD *) &origLobbyHostCommands);
 	Hooks::polyhook("LobbyClientCommands", addrLobbyClientCommands, (DWORD *) &hookLobbyClientCommands, (DWORD *) &origLobbyClientCommands);

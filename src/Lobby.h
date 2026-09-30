@@ -15,6 +15,7 @@ private:
 	static int __stdcall hookLobbyDisplayMessage(int a1, char *msg);
 	static int __fastcall hookCwndEnableWindow(void * This, int EDX, int enable);
 	static void __stdcall hookFrontendChangeScreen(int screen);
+	static void sendGreentextSafe(void *This, const std::string &msg);
 
 public:
 	static void sendGreenTextSystem(void * This, std::string msg);
