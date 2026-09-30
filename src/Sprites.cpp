@@ -130,14 +130,19 @@ static bool patchSpriteFromImageFile(Sprites *sprite, const std::string &file, i
 		spriteLog("custom sprite '%s': could not allocate frame table\n", file.c_str());
 		return false;
 	}
+	// bitmapoffset selects the frame's pixels; start/end are the drawn rect
+	// INSIDE the width x frameHeight frame box (WA.exe 0x4FAD30 hands them to
+	// the blitter as the offset from the box corner). Putting the strip row in
+	// starty drew frame N N*frameHeight pixels too low, so every animated
+	// sprite slid downwards as its frame advanced.
 	for(int i = 0; i < kFrameTableSlots; i++) {
 		int frame = (i < frames) ? i : 0;
 		int top = frame * frameHeight;
 		table[i].bitmapoffset = (DWORD)(top * rowsize);
 		table[i].startx = 0;
-		table[i].starty = (WORD)top;
+		table[i].starty = 0;
 		table[i].endx = (WORD)width;
-		table[i].endy = (WORD)(top + frameHeight);
+		table[i].endy = (WORD)frameHeight;
 	}
 
 	Bitmap::BitmapImage *inlineBitmap =
