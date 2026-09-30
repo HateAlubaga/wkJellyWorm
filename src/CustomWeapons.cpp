@@ -11,6 +11,7 @@
 #include "MemAccess.h"
 #include "renderer/Bitmap.h"
 #include "Utils.h"
+#include "PxWeaponArt.h"
 #include <array>
 #include <filesystem>
 #include "sol/sol.hpp"
@@ -1305,6 +1306,8 @@ int CustomWeapons::registerCustomWeaponLua(sol::object weaponObj, std::string im
 int CustomWeapons::registerCustomWeapon(CustomWeapons::WeaponStruct weaponStruct, std::string img, std::string name1, std::string name2) {
 	std::string resolved = resolveWeaponIconPath(img);
 	std::string key = name1 + '\x01' + name2;
+	PxWeaponArt::Art art;
+	bool hasArt = PxWeaponArt::find(reinterpret_cast<const int *>(&weaponStruct), sizeof(weaponStruct), name1, art);
 
 	auto existing = customWeaponIdByKey.find(key);
 	if(existing != customWeaponIdByKey.end()) {
@@ -1312,6 +1315,11 @@ int CustomWeapons::registerCustomWeapon(CustomWeapons::WeaponStruct weaponStruct
 		weaponImgInjectionList[idx] = {resolved, 0};
 		weaponNameStorage[idx] = {name1, name2};
 		weaponStructInjectionList[idx] = weaponStruct;
+		customAimSprites.erase(existing->second);
+		if(hasArt)
+			pxArt[existing->second] = art;
+		else
+			pxArt.erase(existing->second);
 		printf("registerCustomWeapon: re-registered weapon %s:%s id: %d icon: %s\n",
 			name1.c_str(), name2.c_str(), existing->second, resolved.c_str());
 		return existing->second;
@@ -1326,6 +1334,8 @@ int CustomWeapons::registerCustomWeapon(CustomWeapons::WeaponStruct weaponStruct
 	weaponStructInjectionList.push_back(weaponStruct);
 	int id = maxStandardWeapons + (int)weaponStructInjectionList.size() - 1;
 	customWeaponIdByKey[key] = id;
+	if(hasArt)
+		pxArt[id] = art;
 	printf("registerCustomWeapon: registered weapon %s:%s id: %d icon: %s\n", name1.c_str(), name2.c_str(), id, resolved.c_str());
 	return id;
 }
@@ -1337,14 +1347,86 @@ void CustomWeapons::resetConfig() {
 	weaponImgInjectionList.clear();
 	weaponStructInjectionList.clear();
 	customWeaponIdByKey.clear();
+	customAimSprites.clear();
+	pxArt.clear();
 	customWeaponsEnabled = 0;
 	numAllWeapons = maxStandardWeapons;
 }
 
 
+int __stdcall CustomWeapons::aimSpriteFor(WeaponStruct *ws) {
+	if(!customWeaponsEnabled || !ws)
+		return 0;
+	int idx = -1;
+	if(ws >= &weaponTable[0] && ws < &weaponTable[0] + maxCustomWeapons)
+		idx = (int)(ws - &weaponTable[0]);
+	else {
+		// Not a pointer into our table: identify the weapon by its name string,
+		// which every custom entry owns uniquely (weaponNameStorage).
+		for(int i = maxStandardWeapons; i < numAllWeapons; i++) {
+			if(ws->name1 && ws->name1 == weaponTable[i].name1) {
+				idx = i;
+				break;
+			}
+		}
+	}
+	if(idx < maxStandardWeapons || idx >= numAllWeapons)
+		return 0;
+	auto it = customAimSprites.find(idx);
+	if(it != customAimSprites.end() && it->second > 0)
+		return it->second;
+	return -1;
+}
+
+// WA's worm aim sprite lookup (0x51C060): eax = WeaponStruct*, one stack
+// argument (the worm), `ret 4`, sprite id in eax. For ported ProjectX weapons
+// it falls off its tables (0x60 holds 100000 or a custom sprite id) and
+// returns 0, and the worm animator then draws sprite 0: an invisible worm.
+// Custom weapons get their own aim art when the package has it, otherwise
+// whatever WA computes, with the bazooka pose (0x20D) instead of nothing.
+DWORD addrWormAimSprite_resume;
+void __declspec(naked) hookWormAimSprite() {
+	_asm push edx
+	_asm push eax
+	_asm push eax
+	_asm call CustomWeapons::aimSpriteFor
+	_asm test eax, eax
+	_asm jg have_custom
+	_asm mov ecx, eax // 0 = vanilla weapon, -1 = custom weapon without art
+	_asm pop eax // WeaponStruct*
+	_asm push ecx
+	_asm push dword ptr [esp + 0xC] // worm argument for the original body
+	_asm call original_body
+	_asm pop ecx
+	_asm test eax, eax
+	_asm jnz done
+	_asm test ecx, ecx
+	_asm jz done
+	_asm mov eax, 0x20D
+	_asm done:
+	_asm pop edx
+	_asm ret 4
+
+	_asm have_custom:
+	_asm add esp, 4
+	_asm pop edx
+	_asm ret 4
+
+	// Replays the 6 bytes our jump overwrote, then continues in WA's body,
+	// which returns to our call with `ret 4` (popping the pushed worm).
+	_asm original_body:
+	_asm mov ecx, dword ptr [eax + 0x30]
+	_asm add ecx, -1
+	_asm jmp addrWormAimSprite_resume
+}
+
 int CustomWeapons::install(SignatureScanner & signatureScanner, module mod) {
 	DWORD addrInitializeWeaponTable = Hooks::scanPattern("InitializeWeaponTable", "\x53\x55\x8B\x6C\x24\x0C\x8B\x85\x00\x00\x00\x00\x8B\x88\x00\x00\x00\x00\x56\x57\x68\x00\x00\x00\x00\x33\xDB\x53\x51\xE8\x00\x00\x00\x00\x83\xC4\x0C", "??????xx????xx????xxx????xxxxx????xxx", 0x53CAB0);
 	DWORD addrPrepareWeaponPanel = Hooks::scanPattern("PrepareWeaponPanel", "\x83\xEC\x3C\x53\x55\x56\x57\x8B\xF0\x8D\x44\x24\x38\x50\x8D\x4C\x24\x38\x51\x8D\x7C\x24\x50\xE8\x00\x00\x00\x00\xE8\x00\x00\x00\x00", "??????xxxxxxxxxxxxxxxxxx????x????", 0x568220);
+
+	DWORD addrWormAimSprite = Hooks::scanPattern("WormAimSprite", "\x8B\x48\x30\x83\xC1\xFF\x83\xF9\x03\x0F\x87\xCA\x01\x00\x00\xFF\x24\x8D\x40\xC2\x51\x00\x8B\x48\x34\x83\xC1\xFF\x83\xF9\x0B\x0F\x87", "??????xxxxx????xxx????xxxxxxxxxxx", 0x51C060);
+	addrWormAimSprite_resume = addrWormAimSprite + 6;
+	Hooks::hookAsm(addrWormAimSprite, (DWORD)&hookWormAimSprite);
 
 	DWORD addrPrepareWeaponPanelHookLoop = addrPrepareWeaponPanel + 0x100;
 	addrPrepareWeaponPanelHookLoopEndEarly = addrPrepareWeaponPanel + 0x10D;

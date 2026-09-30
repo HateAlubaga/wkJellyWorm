@@ -93,6 +93,7 @@ add_library(wkJellyWorm SHARED
         src/Sounds.cpp src/Sounds.h
         src/Music.cpp src/Music.h
         src/Sprites.cpp src/Sprites.h
+        src/PxWeaponArt.cpp src/PxWeaponArt.h
         src/WaLibc.cpp src/WaLibc.h
         src/Explosions.cpp src/Explosions.h
         src/Weapons.cpp src/Weapons.h

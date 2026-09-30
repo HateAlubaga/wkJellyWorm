@@ -158,18 +158,20 @@ function(GetGitState _working_dir)
 
     RunGitCommand(show -s "--format=%s" ${object})
     if(exit_code EQUAL 0)
-        set(ENV{GIT_COMMIT_SUBJECT} "${output}")
+        string(REPLACE "\\" "\\\\" safe_subject "${output}")
+        string(REPLACE "\"" "\\\"" safe_subject "${safe_subject}")
+        set(ENV{GIT_COMMIT_SUBJECT} "${safe_subject}")
     endif()
 
     RunGitCommand(show -s "--format=%b" ${object})
     if(exit_code EQUAL 0)
         if(output)
-            # Escape line breaks in the commit message.
-            string(REPLACE "\r\n" "\\r\\n\\\r\n" safe ${output})
-            if(safe STREQUAL output)
-                # Didn't have windows lines - try unix lines.
-                string(REPLACE "\n" "\\n\\\n" safe ${output})
-            endif()
+            # Make the body a valid one-line C string literal: a message
+            # containing quotes or backslashes used to break git.cc.
+            string(REPLACE "\\" "\\\\" safe "${output}")
+            string(REPLACE "\"" "\\\"" safe "${safe}")
+            string(REPLACE "\r" "" safe "${safe}")
+            string(REPLACE "\n" "\\n" safe "${safe}")
         else()
             # There was no commit body - set the safe string to empty.
             set(safe "")

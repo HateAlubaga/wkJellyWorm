@@ -391,10 +391,33 @@ int Sprites::registerCustomSprite(std::string filename, int frames, int flags) {
 	if(existing != resolvedSpriteIds.end())
 		return existing->second;
 
+	if(customSpriteIdsLeft() <= 0) {
+		// An id past 1023 is outside WA's sprite table; handing it out would
+		// make WA index past the table when something draws it.
+		spriteLog("registerCustomSprite: no free id left in %d..%d for '%s'; using 0\n",
+			customSpriteStartingId, kMaxSpriteId, resolved.c_str());
+		return 0;
+	}
 	customSprites.push_back(resolved);
 	int id = customSpriteStartingId + (int)customSprites.size() - 1;
 	resolvedSpriteIds[resolved] = id;
 	return id;
+}
+
+int Sprites::customSpriteIdsLeft() {
+	return kMaxSpriteId - (customSpriteStartingId + (int)customSprites.size()) + 1;
+}
+
+int Sprites::registerCustomSpriteWithReserve(const std::string &filename, int reserve) {
+	if(!Config::customSpritesEnabled)
+		return 0;
+	std::string resolved = Utils::resolveAssetPath(filename);
+	auto existing = resolvedSpriteIds.find(resolved);
+	if(existing != resolvedSpriteIds.end())
+		return existing->second;
+	if(customSpriteIdsLeft() <= reserve)
+		return 0;
+	return registerCustomSprite(filename);
 }
 
 void Sprites::resetConfig() {
@@ -644,18 +667,22 @@ static void drawSpriteChecked(const char *name, sol::variadic_args &va,
 		sprite, toPhase(frame, spriteIndex));
 }
 
-DWORD (__fastcall *origDestroySprite)(Sprites* sprite, int a2);
-static DWORD destroyOneSprite(Sprites *sprite, int a2) {
+// Sprite destructor is thiscall(ecx=sprite, flags) with `ret 4`. Modelled as
+// __fastcall with a dummy edx so the hook also pops the flags argument; the
+// old two-argument form returned with plain `ret` and unbalanced the stack of
+// every caller, which crashed WA while tearing sprites down on exit.
+DWORD (__fastcall *origDestroySprite)(Sprites* sprite, int edx, int flags);
+static DWORD destroyOneSprite(Sprites *sprite, int flags) {
 	if(Config::rendererEnabled && Renderer::isActive()) {
 		BitmapExtension::onDestroySprite(sprite);
 	}
-	return origDestroySprite(sprite, a2);
+	return origDestroySprite(sprite, 0, flags);
 }
 
-DWORD __fastcall hookDestroySprite(Sprites* sprite, int a2) {
+DWORD __fastcall hookDestroySprite(Sprites* sprite, int, int flags) {
 	auto alias = Sprites::aliases.find(sprite);
 	if(alias == Sprites::aliases.end())
-		return destroyOneSprite(sprite, a2);
+		return destroyOneSprite(sprite, flags);
 
 	// First destroy frees the shared object; every later one belongs to a
 	// slot that only borrowed it, so free that slot's original instead.
@@ -674,9 +701,9 @@ DWORD __fastcall hookDestroySprite(Sprites* sprite, int a2) {
 		leftovers.swap(info.originals);
 		Sprites::aliases.erase(alias);
 	}
-	DWORD ret = victim ? destroyOneSprite(victim, a2) : 0;
+	DWORD ret = victim ? destroyOneSprite(victim, flags) : 0;
 	for(auto *original : leftovers)
-		destroyOneSprite(original, a2);
+		destroyOneSprite(original, flags);
 	return ret;
 }
 

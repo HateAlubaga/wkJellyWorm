@@ -102,6 +102,7 @@ int __stdcall Game::hookConstructGlobalContext(int a1) {
 	Config::onConstructGlobalContext(a1);
 	auto pmanager = PackageManager::getInstance();
 	pmanager.handleInitialize();
+	CustomWeapons::assignPxArt();
 	clearLiveTeams();
 	pmanager.handleGameGlobalInit();
 	Landscape::onConstructGlobalContext(a1);

@@ -11,6 +11,7 @@
 #include "entities/tasks/CTaskTeam.h"
 #include "Constants.h"
 #include "entities/Entities.h"
+#include "PxWeaponArt.h"
 
 class CustomWeapons {
 public:
@@ -177,6 +178,10 @@ private:
 	// package's Lua actually captured (e.g. for firing/collision logic)
 	// pointing at a stale or never-populated slot. Keyed by name1+"\x01"+name2.
 	inline static std::unordered_map<std::string, int> customWeaponIdByKey;
+	// Custom worm aiming sprite per weapon id, from the ProjectX .bin trailer.
+	inline static std::unordered_map<int, int> customAimSprites;
+	// ProjectX art found at registration, turned into sprite ids by assignPxArt.
+	inline static std::map<int, PxWeaponArt::Art> pxArt;
 
 	inline static int variablePanelColumns = standardNumColumns;
 	inline static int variablePanelWidthAdd = 144;
@@ -265,6 +270,11 @@ public:
 	// Lua-facing wrapper: type-checks before touching the struct.
 	static int registerCustomWeaponLua(sol::object weaponObj, std::string img, std::string name1, std::string name2);
 	static void resetConfig();
+	// Worm aim sprite for a custom weapon: >0 sprite id, 0 = not a custom
+	// weapon, -1 = custom weapon without its own aim art.
+	static int __stdcall aimSpriteFor(WeaponStruct *ws);
+	// Call after every package initialize() ran, before sprites are loaded.
+	static void assignPxArt();
 
 	// Vanilla weapon templates.
 	//

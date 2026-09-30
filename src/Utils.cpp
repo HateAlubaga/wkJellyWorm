@@ -80,11 +80,13 @@ std::string Utils::resolveAssetPath(const std::string &filename) {
 			return c.string();
 	}
 	// px2jelly sometimes kept the original attachment spelling in Lua while
-	// sanitising the extracted filename (for example, spaces became underscores).
-	// Accept only one unambiguous normalised match inside this package.
+	// sanitising the extracted filename: "a - baseball ( e ).png" was saved as
+	// "a_-_baseball___e__.png", "hivefire(d).png" as "hivefire_d_.png". Every
+	// non-alphanumeric byte therefore compares as '_'. Accept only one
+	// unambiguous normalised match inside this package.
 	auto normaliseAssetName = [](std::string value) {
 		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-			if(ch == ' ' || ch == '-' || ch == '.') return '_';
+			if(!std::isalnum(ch)) return '_';
 			return (char)std::tolower(ch);
 		});
 		value.erase(std::unique(value.begin(), value.end(), [](char a, char b) {
