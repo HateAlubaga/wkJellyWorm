@@ -367,11 +367,7 @@ void __stdcall Lobby::hookFrontendChangeScreen(int screen) {
 					// printf goes to the dev console, which cannot be captured
 					// from outside the process; a file can be.
 					printf("SelfTest: applyAutostart(screen %d) applied %d package(s)\n", screen, applied);
-					FILE *f = nullptr;
-					if(fopen_s(&f, "jelly\\selftest.log", "a") == 0 && f) {
-						fprintf(f, "applyAutostart screen=%d applied=%d\n", screen, applied);
-						fclose(f);
-					}
+					PackageManager::loadLog("applyAutostart screen=%d applied=%d\n", screen, applied);
 				}
 			}
 			if(screen == 1704)

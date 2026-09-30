@@ -97,6 +97,10 @@ public:
 
 
 	static PackageManager & getInstance();
+	// Appends to jelly\selftest.log; the first write of each process
+	// truncates it. Always on: it is the only record of which package was
+	// loading when WA died, and costs one small file write per package.
+	static void loadLog(const char *fmt, ...);
 	void scanPackages();
 	void scanJpxPackages();
 	void enablePackage(std::string name, std::string version, bool manual);

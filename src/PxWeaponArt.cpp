@@ -72,6 +72,7 @@ struct Reader {
 
 struct Trailer {
 	std::string name1;
+	std::string icon;
 	std::string sprites[3]; // for WeaponStruct 0x60, 0x124, 0x170
 	std::string aim;        // first of the 9 animation names (aim, "e"/"p" pose)
 	bool hasAnims = false;
@@ -103,7 +104,7 @@ bool parseTrailer(const std::vector<unsigned char> &data, Trailer &out) {
 	r.u32();
 	out.name1 = r.str();
 	r.str(); // name2
-	r.str(); // icon
+	out.icon = r.str();
 	r.str(); // gfx dir
 	for(auto &s : out.sprites)
 		s = r.str();
@@ -249,6 +250,10 @@ bool PxWeaponArt::find(const int *fields, size_t structSize, const std::string &
 			PxWeaponArt::log("%s: slot 0x%X wants trailer sprite '%s', which is in neither the package nor a _gfx companion\n",
 				name1.c_str(), (unsigned)kSlotOffsets[i], file.c_str());
 	}
+	art.trailerName = bestTrailer.name1;
+	art.iconFile = resolveExisting(packageDir, bestTrailer.icon);
+	if(art.iconFile.empty() && !bestTrailer.icon.empty())
+		PxWeaponArt::log("%s: icon '%s' not found\n", name1.c_str(), bestTrailer.icon.c_str());
 	if(bestTrailer.hasAnims) {
 		art.aimFile = resolveExisting(packageDir, bestTrailer.aim);
 		if(art.aimFile.empty() && !bestTrailer.aim.empty())

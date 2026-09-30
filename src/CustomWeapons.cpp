@@ -12,6 +12,7 @@
 #include "renderer/Bitmap.h"
 #include "Utils.h"
 #include "PxWeaponArt.h"
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include "sol/sol.hpp"
@@ -95,6 +96,35 @@ static std::string resolveWeaponIconPath(const std::string &img) {
 		return resolved;
 	}
 	return img;
+}
+
+static std::string lowerAscii(std::string s) {
+	std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+	return s;
+}
+
+// px2jelly registered most weapons with the placeholder icon, and in
+// multi-weapon packages often reused the first weapon's icon for all of them
+// (every Ascender variant showed ico_ascender). The matched .bin trailer names
+// the icon ProjectX actually used, so prefer it when the registered icon is a
+// placeholder, missing, or a different picture for what is plainly the same
+// weapon. A registered icon that is the same picture in another format
+// (ico_magnet.img vs ico_magnet.png) is kept.
+static std::string pickWeaponIcon(const std::string &img, const std::string &name1, const PxWeaponArt::Art *art) {
+	bool placeholder = img.empty() || img.find("jelly/placeholders/weapon0.img") != std::string::npos;
+	if(art && !art->iconFile.empty() && fileLooksReadable(art->iconFile)) {
+		std::string registered = placeholder ? std::string() : resolveWeaponIconPath(img);
+		bool usable = !registered.empty() && fileLooksReadable(registered);
+		bool sameWeapon = !art->trailerName.empty() && lowerAscii(name1).find(lowerAscii(art->trailerName)) == 0;
+		bool samePicture = usable && lowerAscii(fs::path(registered).stem().string())
+			== lowerAscii(fs::path(art->iconFile).stem().string());
+		if(!usable || (sameWeapon && !samePicture)) {
+			PxWeaponArt::log("%s: icon '%s' -> ProjectX icon '%s'\n", name1.c_str(), img.c_str(), art->iconFile.c_str());
+			return art->iconFile;
+		}
+		return registered;
+	}
+	return resolveWeaponIconPath(img);
 }
 
 void CustomWeapons::onConstructGlobalContext(int a1) {
@@ -1308,10 +1338,10 @@ int CustomWeapons::registerCustomWeaponLua(sol::object weaponObj, std::string im
 }
 
 int CustomWeapons::registerCustomWeapon(CustomWeapons::WeaponStruct weaponStruct, std::string img, std::string name1, std::string name2) {
-	std::string resolved = resolveWeaponIconPath(img);
 	std::string key = name1 + '\x01' + name2;
 	PxWeaponArt::Art art;
 	bool hasArt = PxWeaponArt::find(reinterpret_cast<const int *>(&weaponStruct), sizeof(weaponStruct), name1, art);
+	std::string resolved = pickWeaponIcon(img, name1, hasArt ? &art : nullptr);
 
 	auto existing = customWeaponIdByKey.find(key);
 	if(existing != customWeaponIdByKey.end()) {

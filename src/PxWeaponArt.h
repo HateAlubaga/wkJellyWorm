@@ -20,6 +20,8 @@ namespace PxWeaponArt {
 	struct Art {
 		std::string slotFiles[3]; // resolved image per kSlotOffsets entry, empty = keep
 		std::string aimFile;      // resolved worm aim image, empty = none
+		std::string iconFile;     // resolved weapon panel icon, empty = none
+		std::string trailerName;  // weapon name as ProjectX spelled it
 	};
 
 	// Must run while the registering package's directory is active (i.e. from

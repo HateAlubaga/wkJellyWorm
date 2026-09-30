@@ -129,17 +129,9 @@ int install() {
 		// Truncate BEFORE loading: applyAutostart appends a FAILED line per
 		// package that throws, and truncating afterwards would erase exactly
 		// the diagnostics this exists to capture.
-		FILE *f = nullptr;
-		if(fopen_s(&f, "jelly\\selftest.log", "w") == 0 && f) {
-			fprintf(f, "selftest: loading [autostart] packages\n");
-			fclose(f);
-		}
+		PackageManager::loadLog("selftest: loading [autostart] packages\n");
 		int applied = PackageManager::getInstance().applyAutostart();
-		f = nullptr;
-		if(fopen_s(&f, "jelly\\selftest.log", "a") == 0 && f) {
-			fprintf(f, "selftest: applied %d package(s)\n", applied);
-			fclose(f);
-		}
+		PackageManager::loadLog("selftest: applied %d package(s)\n", applied);
 		printf("SelfTest: applyAutostart at install applied %d package(s)\n", applied);
 	}
 	return 0;

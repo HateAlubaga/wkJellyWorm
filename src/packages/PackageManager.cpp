@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <Windows.h>
 #include <algorithm>
+#include <cstdarg>
 #include <functional>
 #include <set>
 #include <sstream>
@@ -199,22 +200,25 @@ PackageManager &PackageManager::getInstance() {
 	return instance;
 }
 
+void PackageManager::loadLog(const char *fmt, ...) {
+	static bool firstWriteThisProcess = true;
+	FILE *f = nullptr;
+	if(fopen_s(&f, "jelly\\selftest.log", firstWriteThisProcess ? "w" : "a") == 0 && f) {
+		firstWriteThisProcess = false;
+		va_list args;
+		va_start(args, fmt);
+		vfprintf(f, fmt, args);
+		va_end(args);
+		fclose(f);
+	}
+}
+
 int PackageManager::applyAutostart() {
 	int applied = 0;
+	ULONGLONG startAll = GetTickCount64();
 	auto entries = readIniSection(kAutostartSection, Config::iniFile);
-	if(Config::selfTestEnabled) {
-		FILE *f = nullptr;
-		if(fopen_s(&f, "jelly\\selftest.log", "a") == 0 && f) {
-			fprintf(f, "autostart section '%s' from '%s': %d entr(ies)\n",
-				kAutostartSection, Config::iniFile.c_str(), (int)entries.size());
-			int shown = 0;
-			for(auto &kv : entries) {
-				if(shown++ >= 5) break;
-				fprintf(f, "  entry: '%s' = '%s'\n", kv.first.c_str(), kv.second.c_str());
-			}
-			fclose(f);
-		}
-	}
+	loadLog("autostart section '%s' from '%s': %d entr(ies)\n",
+		kAutostartSection, Config::iniFile.c_str(), (int)entries.size());
 	for(auto & kv : entries) {
 		std::string name = kv.first;
 		std::string value = kv.second;
@@ -228,34 +232,24 @@ int PackageManager::applyAutostart() {
 		// process down hard throws nothing and leaves no crash dump, so the
 		// last name in this file is the culprit. This is the only way to
 		// identify it without bisecting 643 packages by hand.
-		if(Config::selfTestEnabled) {
-			FILE *f = nullptr;
-			if(fopen_s(&f, "jelly\\selftest.log", "a") == 0 && f) {
-				fprintf(f, "loading %s\n", name.c_str());
-				fflush(f);
-				fclose(f);
-			}
-		}
+		loadLog("loading %s\n", name.c_str());
+		ULONGLONG start = GetTickCount64();
 		try {
 			enablePackage(name, version, true);
 			checkDependenciesAdd();
 			applied++;
+			loadLog("  %s: %llu ms\n", name.c_str(), GetTickCount64() - start);
 		} catch(std::exception & e) {
 			// A package failing to load is the most common cause of "the mod
 			// does nothing", and the reason only ever went to the dev console,
 			// which cannot be read from outside the process. Record it.
 			printf("applyAutostart(%s=%s): %s\n", name.c_str(), value.c_str(), e.what());
-			if(Config::selfTestEnabled) {
-				FILE *f = nullptr;
-				if(fopen_s(&f, "jelly\\selftest.log", "a") == 0 && f) {
-					fprintf(f, "FAILED %s=%s: %s\n", name.c_str(), value.c_str(), e.what());
-					fclose(f);
-				}
-			}
+			loadLog("FAILED %s=%s: %s\n", name.c_str(), value.c_str(), e.what());
 		}
 	}
 	if(applied > 0 && gameInitialized)
 		ensureAllEnabledInitialized();
+	loadLog("autostart: %d package(s) in %llu ms\n", applied, GetTickCount64() - startAll);
 	return applied;
 }
 
@@ -1110,8 +1104,12 @@ bool PackageManager::isChatRoutableLobbyCommand(const std::string &command) {
 }
 
 void PackageManager::ensureAllEnabledInitialized() {
+	ULONGLONG start = GetTickCount64();
 	for(auto & package : enabledPackagesAll)
 		ensurePackageInitialized(package.second);
+	ULONGLONG spent = GetTickCount64() - start;
+	if(spent >= 50)
+		loadLog("initialize(): %d package(s) in %llu ms\n", (int)enabledPackagesAll.size(), spent);
 }
 
 static std::string getPackageLobbyFeedback(const std::shared_ptr<Package> &pack, bool justEnabled) {
