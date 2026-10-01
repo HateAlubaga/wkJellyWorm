@@ -10,12 +10,14 @@
 #include "entities/gametasks/CTaskMissile.h"
 #include "MemAccess.h"
 #include "PxWeaponArt.h"
+#include "Sprites.h"
 #include <unordered_map>
 
 // noinline: hookFireWeapon reads eax/ecx with inline asm as its first
 // statements. Inlining this helper (it has a stack buffer) makes MSVC add a
 // /GS cookie to the hook prologue, which overwrites eax before it is read.
 static __declspec(noinline) void logFiredWeapon(CustomWeapons::WeaponStruct *ws);
+static __declspec(noinline) void notifyActiveWeapon(CustomWeapons::WeaponStruct *ws);
 static __declspec(noinline) void logCreatedProjectile(Weapons::WeaponProjectileParams *params, CTaskMissile *missile);
 
 
@@ -70,6 +72,7 @@ int __stdcall Weapons::hookFireWeapon(CTaskWorm *worm) {
 	_asm mov launchparams, ecx
 
 	logFiredWeapon(weaponstruct);
+	notifyActiveWeapon(weaponstruct);
 	int ret = PackageManager::getInstance().handleFireWeapon(worm, weaponstruct, launchparams);
 	if(ret) return ret;
 
@@ -129,6 +132,11 @@ static void describeSprite(DWORD sprite, char *out, size_t outSize) {
 	if(primary && primary != 0xDEADDEAD && jellyProbeRead(primary + 0x16, sizeof(WORD)))
 		frames = *(WORD *)(primary + 0x16);
 	sprintf_s(out, outSize, "id=%u flags=0x%X spr=0x%X alt=0x%X frames=%u", id, sprite & 0xFFFF0000, primary, alternate, frames);
+}
+
+// Firing a utility (parachute, jetpack...) makes its weapon-scoped sprites live.
+static __declspec(noinline) void notifyActiveWeapon(CustomWeapons::WeaponStruct *ws) {
+	Sprites::onActiveWeapon(CustomWeapons::weaponIdOf(ws));
 }
 
 static __declspec(noinline) void logFiredWeapon(CustomWeapons::WeaponStruct *ws) {

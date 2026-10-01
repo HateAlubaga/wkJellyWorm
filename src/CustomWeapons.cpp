@@ -12,6 +12,7 @@
 #include "renderer/Bitmap.h"
 #include "Utils.h"
 #include "PxWeaponArt.h"
+#include "Sprites.h"
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -1393,33 +1394,70 @@ void CustomWeapons::resetConfig() {
 	weaponStructInjectionList.clear();
 	customWeaponIdByKey.clear();
 	customAimSprites.clear();
+	ropeAimRanges.clear();
 	pxArt.clear();
 	customWeaponsEnabled = 0;
 	numAllWeapons = maxStandardWeapons;
 }
 
 
-int __stdcall CustomWeapons::aimSpriteFor(WeaponStruct *ws) {
-	if(!customWeaponsEnabled || !ws)
-		return 0;
-	int idx = -1;
-	if(ws >= &weaponTable[0] && ws < &weaponTable[0] + maxCustomWeapons)
-		idx = (int)(ws - &weaponTable[0]);
-	else {
-		// Not a pointer into our table: identify the weapon by its name string,
-		// which every custom entry owns uniquely (weaponNameStorage).
-		for(int i = maxStandardWeapons; i < numAllWeapons; i++) {
-			if(ws->name1 && ws->name1 == weaponTable[i].name1) {
-				idx = i;
-				break;
-			}
-		}
+int CustomWeapons::weaponIdOf(WeaponStruct *ws) {
+	if(!ws)
+		return -1;
+	if(ws >= &weaponTable[0] && ws < &weaponTable[0] + numAllWeapons)
+		return (int)(ws - &weaponTable[0]);
+	// Not a pointer into our table: identify the weapon by its name string,
+	// which every custom entry owns uniquely (weaponNameStorage).
+	if(!jellyProbeRead((DWORD)ws, sizeof(DWORD)) || !ws->name1)
+		return -1;
+	for(int i = maxStandardWeapons; i < numAllWeapons; i++) {
+		if(ws->name1 == weaponTable[i].name1)
+			return i;
 	}
-	if(idx < maxStandardWeapons || idx >= numAllWeapons)
+	return -1;
+}
+
+static std::string normalizedWeaponName(const std::string &name) {
+	std::string out = name;
+	for(char &c : out) {
+		if(c == '_')
+			c = ' ';
+		else
+			c = (char)tolower((unsigned char)c);
+	}
+	return out;
+}
+
+int CustomWeapons::weaponIdByName(const std::string &name) {
+	if(name.empty())
+		return -1;
+	for(size_t i = 0; i < weaponNameStorage.size(); i++) {
+		if(weaponNameStorage[i].first == name || weaponNameStorage[i].second == name)
+			return maxStandardWeapons + (int)i;
+	}
+	std::string wanted = normalizedWeaponName(name);
+	for(size_t i = 0; i < weaponNameStorage.size(); i++) {
+		if(normalizedWeaponName(weaponNameStorage[i].first) == wanted ||
+		   normalizedWeaponName(weaponNameStorage[i].second) == wanted)
+			return maxStandardWeapons + (int)i;
+	}
+	return -1;
+}
+
+int __stdcall CustomWeapons::aimSpriteFor(WeaponStruct *ws) {
+	if(!ws)
+		return 0;
+	int idx = weaponIdOf(ws);
+	// Whatever the worm holds decides which weapon-scoped sprites are live.
+	Sprites::onActiveWeapon(idx);
+	if(!customWeaponsEnabled || idx < maxStandardWeapons || idx >= numAllWeapons)
 		return 0;
 	auto it = customAimSprites.find(idx);
 	if(it != customAimSprites.end() && it->second > 0)
 		return it->second;
+	// Utilities (type 4) have no aim pose; WA's own lookup handles them.
+	if(ws->unknown30 == 4)
+		return 0;
 	return -1;
 }
 
@@ -1465,6 +1503,141 @@ void __declspec(naked) hookWormAimSprite() {
 	_asm jmp addrWormAimSprite_resume
 }
 
+void CustomWeapons::setRopeAimRange(sol::object weapon, double minFraction, double maxFraction) {
+	RopeAimRange range = {"", -1, -1, 0, 0};
+	if(weapon.is<int>())
+		range.weaponId = weapon.as<int>();
+	else if(weapon.is<std::string>())
+		range.name = weapon.as<std::string>();
+	if(range.weaponId < 0 && range.name.empty()) {
+		printf("SetRopeAimRange: weapon is neither id nor name\n");
+		return;
+	}
+	if(minFraction > maxFraction)
+		std::swap(minFraction, maxFraction);
+	minFraction = std::clamp(minFraction, 0.0, 1.0);
+	maxFraction = std::clamp(maxFraction, 0.0, 1.0);
+	range.minAngle = (int)(minFraction * 0x10000 + 0.5);
+	range.maxAngle = (int)(maxFraction * 0x10000 + 0.5);
+	bool replaced = false;
+	for(auto &r : ropeAimRanges) {
+		if(r.name == range.name && (!range.name.empty() || r.weaponId == range.weaponId)) {
+			r = range;
+			replaced = true;
+			break;
+		}
+	}
+	if(!replaced)
+		ropeAimRanges.push_back(range);
+	printf("SetRopeAimRange: '%s' id %d -> 0x%X..0x%X\n", range.name.c_str(), range.weaponId,
+		range.minAngle, range.maxAngle);
+}
+
+int __stdcall CustomWeapons::ropeAimClamp(WeaponStruct *ws, int angle) {
+	if(ropeAimRanges.empty() || !customWeaponsEnabled)
+		return kRopeAimNative;
+	int idx = weaponIdOf(ws);
+	if(idx < maxStandardWeapons || idx >= numAllWeapons)
+		return kRopeAimNative;
+	for(auto &r : ropeAimRanges) {
+		if(r.weaponId < 0 && !r.name.empty() && r.resolvedAtCount != numAllWeapons) {
+			r.weaponId = weaponIdByName(r.name);
+			r.resolvedAtCount = numAllWeapons;
+		}
+		if(r.weaponId == idx)
+			return std::clamp(angle, r.minAngle, r.maxAngle);
+	}
+	return kRopeAimNative;
+}
+
+// WA clamps the worm's aim angle (+0x24C) for ninja-rope weapons (u30=4,
+// u34=6) at four places: weapon select, two state handlers and the per-frame
+// aim update. Each reads the scheme's rope byte (`mov al, [edx+0x434a]`),
+// picks a lower bound of 0x3333, 0x8000 or 0xC000 from it, caps at 0x10000
+// and stores at `mov [esi+0x24c], eax`. ProjectX's 360 rope aimed the whole
+// circle, so for ropes covered by SetRopeAimRange we compute the angle and
+// jump straight to that store. esi = worm everywhere; ecx and edx are kept.
+// Each site's thunk pushes its store and resume addresses; the shared body
+// "returns" to one of them and drops the other.
+void __declspec(naked) hookRopeAimClampCommon() {
+	_asm push ecx
+	_asm push edx
+	_asm push dword ptr [esi + 0x24C]
+	_asm push dword ptr [esi + 0x36C]
+	_asm call CustomWeapons::ropeAimClamp
+	_asm pop edx
+	_asm pop ecx
+	_asm cmp eax, 0x80000000
+	_asm je native
+	_asm add esp, 4 // drop resume, continue at WA's store with our angle
+	_asm ret
+	_asm native:
+	_asm mov al, byte ptr [edx + 0x434A] // the instruction our jump replaced
+	_asm ret 4 // continue after it, drop store
+}
+
+DWORD addrRopeAimClamp1_resume, addrRopeAimClamp1_store;
+DWORD addrRopeAimClamp2_resume, addrRopeAimClamp2_store;
+DWORD addrRopeAimClamp3_resume, addrRopeAimClamp3_store;
+DWORD addrRopeAimClamp4_resume, addrRopeAimClamp4_store;
+void __declspec(naked) hookRopeAimClamp1() {
+	_asm push addrRopeAimClamp1_store
+	_asm push addrRopeAimClamp1_resume
+	_asm jmp hookRopeAimClampCommon
+}
+void __declspec(naked) hookRopeAimClamp2() {
+	_asm push addrRopeAimClamp2_store
+	_asm push addrRopeAimClamp2_resume
+	_asm jmp hookRopeAimClampCommon
+}
+void __declspec(naked) hookRopeAimClamp3() {
+	_asm push addrRopeAimClamp3_store
+	_asm push addrRopeAimClamp3_resume
+	_asm jmp hookRopeAimClampCommon
+}
+void __declspec(naked) hookRopeAimClamp4() {
+	_asm push addrRopeAimClamp4_store
+	_asm push addrRopeAimClamp4_resume
+	_asm jmp hookRopeAimClampCommon
+}
+
+static void installRopeAimClampHooks() {
+	struct Site {
+		const char *name, *pattern, *mask;
+		DWORD expected, hookOffset, storeOffset;
+		DWORD *resume, *store;
+		void (*stub)();
+	};
+	const Site sites[] = {
+		{"RopeAimClamp1", "\x8B\x4E\x2C\x8B\x91\x10\x05\x00\x00\x00\x00\x00\x00\x00\x00\x84\xC0\x75\x14\x8B\x86\x4C\x02\x00\x00\x3D\x33\x33\x00\x00\x7D\x2D\xB8\x33\x33\x00\x00\xEB\x32\x3A\xC3", "xxxxxxxxx??????xxxxxxxxxxxxxxxxxxxxxxxxxx", 0x5173D5, 0x9, 0x59,
+			&addrRopeAimClamp1_resume, &addrRopeAimClamp1_store, &hookRopeAimClamp1},
+		{"RopeAimClamp2", "\x8B\x46\x2C\x8B\x48\x24\x80\xB9\x6C\xD9\x00\x00\x00\x75\x5C\x8B\x90\x10\x05\x00\x00\x00\x00\x00\x00\x00\x00\x84\xC0\x75\x14", "xxxxxxxxxxxxxxxxxxxxx??????xxxx", 0x519D80, 0x15, 0x65,
+			&addrRopeAimClamp2_resume, &addrRopeAimClamp2_store, &hookRopeAimClamp2},
+		{"RopeAimClamp3", "\x0F\x85\x98\x00\x00\x00\x8B\x48\x24\x80\xB9\x6C\xD9\x00\x00\x00\x75\x5C\x8B\x90\x10\x05\x00\x00\x00\x00\x00\x00\x00\x00\x84\xC0", "xxxxxxxxxxxxxxxxxxxxxxxx??????xx", 0x51B1A9, 0x18, 0x68,
+			&addrRopeAimClamp3_resume, &addrRopeAimClamp3_store, &hookRopeAimClamp3},
+		{"RopeAimClamp4", "\x8B\x4E\x2C\x8B\x91\x10\x05\x00\x00\x00\x00\x00\x00\x00\x00\x84\xC0\x75\x14\x8B\x86\x4C\x02\x00\x00\x3D\x33\x33\x00\x00\x7D\x2D\xB8\x33\x33\x00\x00\xEB\x32\x3C\x01", "xxxxxxxxx??????xxxxxxxxxxxxxxxxxxxxxxxxxx", 0x51D4E9, 0x9, 0x59,
+			&addrRopeAimClamp4_resume, &addrRopeAimClamp4_store, &hookRopeAimClamp4},
+	};
+	for(const Site &s : sites) {
+		DWORD base;
+		try {
+			base = Hooks::scanPattern(s.name, s.pattern, s.mask, s.expected);
+		} catch(std::exception &e) {
+			printf("installRopeAimClampHooks: %s; 360 ropes keep WA's limit there\n", e.what());
+			continue;
+		}
+		DWORD hook = base + s.hookOffset, store = base + s.storeOffset;
+		if(memcmp((void *)hook, "\x8A\x82\x4A\x43\x00\x00", 6) != 0 ||
+		   memcmp((void *)store, "\x89\x86\x4C\x02\x00\x00", 6) != 0) {
+			printf("installRopeAimClampHooks: %s at 0x%X: unexpected bytes, not hooked\n", s.name, base);
+			continue;
+		}
+		*s.resume = hook + 6;
+		*s.store = store;
+		Hooks::hookAsm(hook, (DWORD)s.stub);
+	}
+}
+
 int CustomWeapons::install(SignatureScanner & signatureScanner, module mod) {
 	DWORD addrInitializeWeaponTable = Hooks::scanPattern("InitializeWeaponTable", "\x53\x55\x8B\x6C\x24\x0C\x8B\x85\x00\x00\x00\x00\x8B\x88\x00\x00\x00\x00\x56\x57\x68\x00\x00\x00\x00\x33\xDB\x53\x51\xE8\x00\x00\x00\x00\x83\xC4\x0C", "??????xx????xx????xxx????xxxxx????xxx", 0x53CAB0);
 	DWORD addrPrepareWeaponPanel = Hooks::scanPattern("PrepareWeaponPanel", "\x83\xEC\x3C\x53\x55\x56\x57\x8B\xF0\x8D\x44\x24\x38\x50\x8D\x4C\x24\x38\x51\x8D\x7C\x24\x50\xE8\x00\x00\x00\x00\xE8\x00\x00\x00\x00", "??????xxxxxxxxxxxxxxxxxx????x????", 0x568220);
@@ -1472,6 +1645,7 @@ int CustomWeapons::install(SignatureScanner & signatureScanner, module mod) {
 	DWORD addrWormAimSprite = Hooks::scanPattern("WormAimSprite", "\x8B\x48\x30\x83\xC1\xFF\x83\xF9\x03\x0F\x87\xCA\x01\x00\x00\xFF\x24\x8D\x40\xC2\x51\x00\x8B\x48\x34\x83\xC1\xFF\x83\xF9\x0B\x0F\x87", "??????xxxxx????xxx????xxxxxxxxxxx", 0x51C060);
 	addrWormAimSprite_resume = addrWormAimSprite + 6;
 	Hooks::hookAsm(addrWormAimSprite, (DWORD)&hookWormAimSprite);
+	installRopeAimClampHooks();
 
 	DWORD addrPrepareWeaponPanelHookLoop = addrPrepareWeaponPanel + 0x100;
 	addrPrepareWeaponPanelHookLoopEndEarly = addrPrepareWeaponPanel + 0x10D;
@@ -1586,6 +1760,15 @@ int CustomWeapons::install(SignatureScanner & signatureScanner, module mod) {
 	lua->set_function("getAllianceIdFromTeam", &getAllianceIdFromTeam);
 	lua->set_function("getPanelTeamSlotFromTeam", &getPanelTeamSlotFromTeam);
 	lua->set_function("getTeamSlotFromTeam", &getTeamSlotFromTeam);
+	// SetRopeAimRange(weapon[, min[, max]]): aim range of a custom ninja rope
+	// as fractions of the half circle, 0 = straight down, 1 = straight up.
+	// weapon is a custom weapon id or its registered name; defaults 0..1.
+	auto ropeAimRangeLua = [](sol::object weapon, sol::optional<double> minFraction,
+			sol::optional<double> maxFraction) {
+		setRopeAimRange(weapon, minFraction.value_or(0.0), maxFraction.value_or(1.0));
+	};
+	lua->set_function("SetRopeAimRange", ropeAimRangeLua);
+	lua->set_function("setRopeAimRange", ropeAimRangeLua);
 
 	// diagnostics + raw-memory access for /delay probe и для обхода "slot успел смениться" race
 	lua->set_function("getTeamWeaponAddr", &getTeamWeaponFieldAddr);

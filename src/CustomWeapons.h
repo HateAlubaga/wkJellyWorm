@@ -180,6 +180,17 @@ private:
 	inline static std::unordered_map<std::string, int> customWeaponIdByKey;
 	// Custom worm aiming sprite per weapon id, from the ProjectX .bin trailer.
 	inline static std::unordered_map<int, int> customAimSprites;
+	// Aim range of custom ninja-rope weapons, set by SetRopeAimRange. Names
+	// resolve lazily: a package may call it before its weapon is registered.
+	struct RopeAimRange {
+		std::string name;
+		int weaponId;
+		int resolvedAtCount; // numAllWeapons at the last failed name lookup
+		int minAngle;
+		int maxAngle;
+	};
+	inline static std::vector<RopeAimRange> ropeAimRanges;
+	static void setRopeAimRange(sol::object weapon, double minFraction, double maxFraction);
 	// ProjectX art found at registration, turned into sprite ids by assignPxArt.
 	inline static std::map<int, PxWeaponArt::Art> pxArt;
 
@@ -270,9 +281,18 @@ public:
 	// Lua-facing wrapper: type-checks before touching the struct.
 	static int registerCustomWeaponLua(sol::object weaponObj, std::string img, std::string name1, std::string name2);
 	static void resetConfig();
-	// Worm aim sprite for a custom weapon: >0 sprite id, 0 = not a custom
-	// weapon, -1 = custom weapon without its own aim art.
+	// Worm aim sprite for a custom weapon: >0 sprite id, 0 = let WA decide
+	// (vanilla weapon or custom utility), -1 = custom weapon without aim art.
 	static int __stdcall aimSpriteFor(WeaponStruct *ws);
+	// Ninja-rope aim clamp: the clamped angle (16.16, 0 = down, 0x10000 = up)
+	// when SetRopeAimRange covers ws, else kRopeAimNative (WA clamps itself).
+	static const int kRopeAimNative = (int)0x80000000;
+	static int __stdcall ropeAimClamp(WeaponStruct *ws, int angle);
+	// Weapon id of a WeaponStruct WA hands us (vanilla or custom), -1 if unknown.
+	static int weaponIdOf(WeaponStruct *ws);
+	// Id of the custom weapon registered as `name` (name1 or name2; '_' and
+	// ' ' match each other), -1 when there is none.
+	static int weaponIdByName(const std::string &name);
 	// Call after every package initialize() ran, before sprites are loaded.
 	static void assignPxArt();
 

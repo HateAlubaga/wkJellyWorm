@@ -9,6 +9,7 @@
 #include "renderer/BitmapExtension.h"
 #include "WaLibc.h"
 #include "Config.h"
+#include "CustomWeapons.h"
 #include "Lua.h"
 #include "MemAccess.h"
 #include <sol/sol.hpp>
@@ -239,7 +240,13 @@ void Sprites::aliasIntoSlot(DWORD ddDisplay, Sprites *sprite, int targetId) {
 }
 
 void Sprites::onConstructGlobalContext(int a1) {
-	if(!Config::customSpritesEnabled || (customSprites.empty() && fileOverrides.empty()) || !Game::isValidDdGame())
+	// The last game's weapon sprites died with its sprite table.
+	weaponSwapped.clear();
+	activeOverrideWeapon = -1;
+	for(auto &o : weaponOverrides)
+		o.sprite = nullptr;
+	if(!Config::customSpritesEnabled || (customSprites.empty() && fileOverrides.empty() && weaponOverrides.empty())
+	   || !Game::isValidDdGame())
 		return;
 
 	auto addrDD_Display = Game::getAddrDdDisplay();
@@ -278,46 +285,17 @@ void Sprites::onConstructGlobalContext(int a1) {
 		aliasIntoSlot(addrDD_Display, source, targetId);
 	}
 
-	// Image-file overrides (worm skins and the like). WA's LoadSprite refuses
-	// an occupied id, so each image is loaded into a free scratch slot, moved
-	// into its target slots, and the scratch slot is emptied again.
+	// Image-file overrides (worm skins and the like), loaded through a scratch
+	// slot and moved into their target slots.
 	for(const auto &entry : fileOverrides) {
 		const std::string &file = entry.first;
 		if(entry.second.empty())
 			continue;
-		int scratch = 0;
-		for(int candidate = kMaxSpriteId; candidate >= kMinSpriteId; candidate--) {
-			if(candidate >= customSpriteStartingId && candidate < customSpriteStartingId + (int)customSprites.size())
-				continue;
-			DWORD a = addrDD_Display + kSpriteTableOffset + (DWORD)candidate * 4;
-			DWORD b = addrDD_Display + kSpriteTableOffset + 0x1000 + (DWORD)candidate * 4;
-			if(jellyProbeRead(a, 4) && jellyProbeRead(b, 4) && !*(DWORD *)a && !*(DWORD *)b) {
-				scratch = candidate;
-				break;
-			}
-		}
-		if(!scratch) {
-			spriteLog("SetSpriteOverride '%s': no free scratch slot; skipping\n", file.c_str());
-			continue;
-		}
-		DWORD paletteEntry = addrDD_Display + 8 + (DWORD)scratch * 4;
-		DWORD savedPalette = jellyProbeRead(paletteEntry, 4) ? *(DWORD *)paletteEntry : 0;
-		Sprites *sprite = loadCustomSpriteIntoSlot(addrDD_Display, addrPC_FileArchive, scratch, file);
-		*(DWORD *)(addrDD_Display + kSpriteTableOffset + (DWORD)scratch * 4) = 0;
-		*(DWORD *)paletteEntry = savedPalette;
-		if(!sprite || !jellyProbeRead((DWORD)sprite, sizeof(Sprites)))
+		Sprites *sprite = loadViaScratchSlot(addrDD_Display, addrPC_FileArchive, file);
+		if(!sprite)
 			continue;
 		aliases[sprite].slots = 0;
-		if(flagHintFor(file) < 0) {
-			// No ProjectX flags: animate like the sprite being replaced.
-			DWORD firstSlot = addrDD_Display + kSpriteTableOffset + (DWORD)entry.second.front() * 4;
-			Sprites *native = jellyProbeRead(firstSlot, 4) ? *(Sprites **)firstSlot : nullptr;
-			if(native && jellyProbeRead((DWORD)native, sizeof(Sprites))) {
-				sprite->flags_word10 = (WORD)((sprite->flags_word10 & ~3) | (native->flags_word10 & 3));
-				if(native->fps_wordA)
-					sprite->fps_wordA = native->fps_wordA;
-			}
-		}
+		inheritNativeAnimation(addrDD_Display, sprite, entry.second.front(), file);
 		for(int targetId : entry.second) {
 			DWORD targetSlot = addrDD_Display + kSpriteTableOffset + (DWORD)targetId * 4;
 			Sprites *original = jellyProbeRead(targetSlot, 4) ? *(Sprites **)targetSlot : nullptr;
@@ -332,6 +310,172 @@ void Sprites::onConstructGlobalContext(int a1) {
 			aliases.erase(sprite);
 			spriteLog("SetSpriteOverride '%s': no valid target, sprite dropped\n", file.c_str());
 		}
+	}
+
+	// Weapon-scoped overrides: each image is loaded once and kept out of the
+	// table; onActiveWeapon moves it into its slots while its weapon is active.
+	std::unordered_map<std::string, Sprites *> weaponSprites;
+	for(auto &o : weaponOverrides) {
+		if(o.weaponId < 0 && !o.weaponName.empty())
+			o.weaponId = CustomWeapons::weaponIdByName(o.weaponName);
+		if(o.weaponId < 0) {
+			spriteLog("SetWeaponSpriteOverride '%s' -> %d: weapon '%s' is not registered; skipping\n",
+				o.file.c_str(), o.targetId, o.weaponName.c_str());
+			continue;
+		}
+		if(o.sourceId > 0) {
+			DWORD sourceSlot = addrDD_Display + kSpriteTableOffset + (DWORD)o.sourceId * 4;
+			Sprites *source = jellyProbeRead(sourceSlot, 4) ? *(Sprites **)sourceSlot : nullptr;
+			o.sprite = (source && jellyProbeRead((DWORD)source, sizeof(Sprites))) ? source : nullptr;
+			spriteLog("SetWeaponSpriteOverride: weapon %d slot %d <- native %d (0x%X)\n",
+				o.weaponId, o.targetId, o.sourceId, (DWORD)o.sprite);
+			continue;
+		}
+		auto loaded = weaponSprites.find(o.file);
+		if(loaded == weaponSprites.end()) {
+			Sprites *sprite = loadViaScratchSlot(addrDD_Display, addrPC_FileArchive, o.file);
+			if(sprite)
+				inheritNativeAnimation(addrDD_Display, sprite, o.targetId, o.file);
+			loaded = weaponSprites.emplace(o.file, sprite).first;
+		}
+		o.sprite = loaded->second;
+		if(o.sprite)
+			spriteLog("SetWeaponSpriteOverride: weapon %d slot %d <- '%s' %d frames %dx%d flags=0x%X\n",
+				o.weaponId, o.targetId, o.file.c_str(), o.sprite->max_frames_word16,
+				o.sprite->width_wordC, o.sprite->height_wordE, o.sprite->flags_word10);
+		else
+			spriteLog("SetWeaponSpriteOverride: weapon %d slot %d: '%s' failed to load\n",
+				o.weaponId, o.targetId, o.file.c_str());
+	}
+}
+
+// WA's LoadSprite refuses an occupied id, so the image is loaded into a free
+// scratch slot, which is emptied again right after. The caller owns the
+// returned sprite (nullptr when it could not be loaded).
+Sprites *Sprites::loadViaScratchSlot(DWORD addrDD_Display, DWORD addrPC_FileArchive, const std::string &file) {
+	int scratch = 0;
+	for(int candidate = kMaxSpriteId; candidate >= kMinSpriteId; candidate--) {
+		if(candidate >= customSpriteStartingId && candidate < customSpriteStartingId + (int)customSprites.size())
+			continue;
+		DWORD a = addrDD_Display + kSpriteTableOffset + (DWORD)candidate * 4;
+		DWORD b = addrDD_Display + kSpriteTableOffset + 0x1000 + (DWORD)candidate * 4;
+		if(jellyProbeRead(a, 4) && jellyProbeRead(b, 4) && !*(DWORD *)a && !*(DWORD *)b) {
+			scratch = candidate;
+			break;
+		}
+	}
+	if(!scratch) {
+		spriteLog("SetSpriteOverride '%s': no free scratch slot; skipping\n", file.c_str());
+		return nullptr;
+	}
+	DWORD paletteEntry = addrDD_Display + 8 + (DWORD)scratch * 4;
+	DWORD savedPalette = jellyProbeRead(paletteEntry, 4) ? *(DWORD *)paletteEntry : 0;
+	Sprites *sprite = loadCustomSpriteIntoSlot(addrDD_Display, addrPC_FileArchive, scratch, file);
+	*(DWORD *)(addrDD_Display + kSpriteTableOffset + (DWORD)scratch * 4) = 0;
+	*(DWORD *)paletteEntry = savedPalette;
+	if(!sprite || !jellyProbeRead((DWORD)sprite, sizeof(Sprites)))
+		return nullptr;
+	return sprite;
+}
+
+// Without ProjectX flags the image animates like the sprite it replaces.
+void Sprites::inheritNativeAnimation(DWORD addrDD_Display, Sprites *sprite, int targetId, const std::string &file) {
+	if(flagHintFor(file) >= 0)
+		return;
+	DWORD slot = addrDD_Display + kSpriteTableOffset + (DWORD)targetId * 4;
+	Sprites *native = jellyProbeRead(slot, 4) ? *(Sprites **)slot : nullptr;
+	if(native && jellyProbeRead((DWORD)native, sizeof(Sprites))) {
+		sprite->flags_word10 = (WORD)((sprite->flags_word10 & ~3) | (native->flags_word10 & 3));
+		if(native->fps_wordA)
+			sprite->fps_wordA = native->fps_wordA;
+	}
+}
+
+void Sprites::setWeaponSpriteOverride(int weaponId, const std::string &weaponName, int targetId,
+		const std::string &filename, int frames, int flags) {
+	if(targetId < kMinSpriteId || targetId > kMaxSpriteId || (weaponId < 0 && weaponName.empty())) {
+		spriteLog("SetWeaponSpriteOverride: invalid weapon=%d '%s' target=%d for '%s'\n",
+			weaponId, weaponName.c_str(), targetId, filename.c_str());
+		return;
+	}
+	// Resolve now, while the calling package's directory is still active.
+	std::string resolved = Utils::resolveAssetPath(filename);
+	if(frames > 0)
+		frameHints[resolved] = frames;
+	if(flags >= 0)
+		flagHints[resolved] = flags;
+	for(auto &o : weaponOverrides) {
+		if(o.weaponId == weaponId && o.weaponName == weaponName && o.targetId == targetId) {
+			o.file = resolved;
+			o.sourceId = 0;
+			return;
+		}
+	}
+	WeaponOverride o;
+	o.weaponId = weaponId;
+	o.weaponName = weaponName;
+	o.targetId = targetId;
+	o.file = resolved;
+	weaponOverrides.push_back(o);
+}
+
+void Sprites::setWeaponSpriteOverrideNative(int weaponId, const std::string &weaponName, int targetId, int sourceId) {
+	if(targetId < kMinSpriteId || targetId > kMaxSpriteId || sourceId < kMinSpriteId || sourceId > kMaxSpriteId ||
+	   (weaponId < 0 && weaponName.empty())) {
+		spriteLog("SetWeaponSpriteOverride: invalid weapon=%d '%s' target=%d source=%d\n",
+			weaponId, weaponName.c_str(), targetId, sourceId);
+		return;
+	}
+	for(auto &o : weaponOverrides) {
+		if(o.weaponId == weaponId && o.weaponName == weaponName && o.targetId == targetId) {
+			o.file.clear();
+			o.sourceId = sourceId;
+			return;
+		}
+	}
+	WeaponOverride o;
+	o.weaponId = weaponId;
+	o.weaponName = weaponName;
+	o.targetId = targetId;
+	o.sourceId = sourceId;
+	weaponOverrides.push_back(o);
+}
+
+void Sprites::restoreWeaponSlots(DWORD addrDD_Display) {
+	// Newest first, so a slot swapped twice ends on its true original.
+	for(auto it = weaponSwapped.rbegin(); it != weaponSwapped.rend(); ++it) {
+		DWORD slot = addrDD_Display + kSpriteTableOffset + (DWORD)it->targetId * 4;
+		if(jellyProbeRead(slot, 4))
+			*(Sprites **)slot = it->displaced;
+	}
+	weaponSwapped.clear();
+}
+
+void Sprites::onActiveWeapon(int weaponId) {
+	if(weaponId == activeOverrideWeapon)
+		return;
+	activeOverrideWeapon = weaponId;
+	if(weaponOverrides.empty())
+		return;
+	DWORD addrDD_Display = Game::getAddrDdDisplay();
+	if(!addrDD_Display)
+		return;
+	restoreWeaponSlots(addrDD_Display);
+	for(const auto &o : weaponOverrides) {
+		if(o.weaponId != weaponId || !o.sprite)
+			continue;
+		DWORD slot = addrDD_Display + kSpriteTableOffset + (DWORD)o.targetId * 4;
+		if(!jellyProbeRead(slot, 4))
+			continue;
+		Sprites *current = *(Sprites **)slot;
+		if(current == o.sprite)
+			continue;
+		weaponSwapped.push_back({o.targetId, current, o.sprite});
+		*(Sprites **)slot = o.sprite;
+	}
+	if(weaponSwapLogLines < 200) {
+		weaponSwapLogLines++;
+		spriteLog("active weapon %d: %d weapon sprite slot(s) swapped in\n", weaponId, (int)weaponSwapped.size());
 	}
 }
 
@@ -432,6 +576,13 @@ void Sprites::resetConfig() {
 	fileOverrides.clear();
 	frameHints.clear();
 	flagHints.clear();
+	DWORD addrDD_Display = Game::getAddrDdDisplay();
+	if(addrDD_Display)
+		restoreWeaponSlots(addrDD_Display);
+	weaponSwapped.clear();
+	weaponOverrides.clear();
+	activeOverrideWeapon = -1;
+	weaponSwapLogLines = 0;
 }
 
 int (__fastcall *origLoadSprite)(DWORD DD_Display, int EDX, int palette, int id, int a4, int a5, const char *filename);
@@ -684,7 +835,40 @@ static DWORD destroyOneSprite(Sprites *sprite, int flags) {
 	return origDestroySprite(sprite, 0, flags);
 }
 
+Sprites *Sprites::onDestroyWeaponSprite(Sprites *sprite) {
+	for(auto it = weaponSwapped.begin(); it != weaponSwapped.end(); ++it) {
+		if(it->sprite == sprite) {
+			// WA is freeing the slot our weapon sprite borrowed: the native it
+			// displaced is the slot's real owner. Ours is freed with the rest.
+			Sprites *displaced = it->displaced;
+			weaponSwapped.erase(it);
+			return displaced;
+		}
+	}
+	return sprite;
+}
+
+void Sprites::onDestroyGlobalContext() {
+	DWORD addrDD_Display = Game::getAddrDdDisplay();
+	if(addrDD_Display)
+		restoreWeaponSlots(addrDD_Display);
+	weaponSwapped.clear();
+	activeOverrideWeapon = -1;
+	// Loaded weapon sprites sit in no slot, so WA never frees them.
+	std::vector<Sprites *> freed;
+	for(auto &o : weaponOverrides) {
+		if(o.sprite && o.sourceId <= 0 && std::find(freed.begin(), freed.end(), o.sprite) == freed.end()) {
+			freed.push_back(o.sprite);
+			destroyOneSprite(o.sprite, 1);
+		}
+		o.sprite = nullptr;
+	}
+}
+
 DWORD __fastcall hookDestroySprite(Sprites* sprite, int, int flags) {
+	sprite = Sprites::onDestroyWeaponSprite(sprite);
+	if(!sprite)
+		return 0;
 	auto alias = Sprites::aliases.find(sprite);
 	if(alias == Sprites::aliases.end())
 		return destroyOneSprite(sprite, flags);
@@ -743,6 +927,30 @@ int Sprites::install(SignatureScanner &, module) {
 	};
 	lua->set_function("SetSpriteOverride", spriteOverrideLua);
 	lua->set_function("setSpriteOverride", spriteOverrideLua);
+	// SetWeaponSpriteOverride(weapon, target, file|nativeId[, frames[, flags]]):
+	// weapon is a custom weapon id or its registered name.
+	auto weaponSpriteOverrideLua = [](sol::object weapon, int targetId, sol::object source,
+			sol::optional<int> frames, sol::optional<int> flags) {
+		int weaponId = -1;
+		std::string weaponName;
+		if(weapon.is<int>())
+			weaponId = weapon.as<int>();
+		else if(weapon.is<std::string>())
+			weaponName = weapon.as<std::string>();
+		if(weaponId < 0 && weaponName.empty()) {
+			spriteLog("SetWeaponSpriteOverride: target %d: weapon is neither id nor name\n", targetId);
+			return;
+		}
+		if(source.is<std::string>())
+			setWeaponSpriteOverride(weaponId, weaponName, targetId, source.as<std::string>(),
+				frames.value_or(0), flags.value_or(-1));
+		else if(source.is<int>())
+			setWeaponSpriteOverrideNative(weaponId, weaponName, targetId, source.as<int>());
+		else
+			spriteLog("SetWeaponSpriteOverride: target %d: source is neither sprite id nor file name\n", targetId);
+	};
+	lua->set_function("SetWeaponSpriteOverride", weaponSpriteOverrideLua);
+	lua->set_function("setWeaponSpriteOverride", weaponSpriteOverrideLua);
 	// Ported packages call these with 3..10 arguments in several orders. A
 	// strict int binding raises a Lua error on a short call, which aborts the
 	// rest of the package callback (weapon logic included). Draw only the

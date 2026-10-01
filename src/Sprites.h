@@ -77,6 +77,31 @@ private:
 	// resolved image path -> target ids, in registration order
 	static inline std::vector<std::pair<std::string, std::vector<int>>> fileOverrides;
 	static void aliasIntoSlot(DWORD ddDisplay, Sprites *sprite, int targetId);
+	static Sprites *loadViaScratchSlot(DWORD ddDisplay, DWORD fileArchive, const std::string &file);
+	static void inheritNativeAnimation(DWORD ddDisplay, Sprites *sprite, int targetId, const std::string &file);
+
+	// SetWeaponSpriteOverride(weapon, target, file): a slot override that only
+	// holds while that weapon is the active one (ProjectX utilities restyle the
+	// shared parachute / jetpack sprites for their own weapon only).
+	struct WeaponOverride {
+		int weaponId = -1;          // custom weapon id; -1 = look up weaponName
+		std::string weaponName;
+		int targetId = 0;
+		std::string file;           // resolved image path ("" with sourceId)
+		int sourceId = 0;           // >0: borrow that native slot's sprite instead
+		Sprites *sprite = nullptr;  // per game; a loaded file is owned by no slot
+	};
+	static inline std::vector<WeaponOverride> weaponOverrides;
+	// Slots currently holding a weapon sprite, with the pointer they displaced.
+	struct WeaponSwap {
+		int targetId;
+		Sprites *displaced;
+		Sprites *sprite;
+	};
+	static inline std::vector<WeaponSwap> weaponSwapped;
+	static inline int activeOverrideWeapon = -1;
+	static inline int weaponSwapLogLines = 0;
+	static void restoreWeaponSlots(DWORD ddDisplay);
 	static inline bool hookingVfs = false;
 	static inline std::string hookingFilename;
 
@@ -102,6 +127,22 @@ public:
 	// ProjectX SetSpriteOverride(id, LoadSprite(file)): the image never needs a
 	// custom id of its own, so it does not eat the small 851..1023 range.
 	static void setSpriteOverrideFile(int targetId, std::string filename, int frames = 0, int flags = -1);
+	// Like setSpriteOverrideFile, but only while weapon `weaponId` (or, when
+	// that is -1, the custom weapon named `weaponName`) is the active weapon.
+	static void setWeaponSpriteOverride(int weaponId, const std::string &weaponName, int targetId,
+		const std::string &filename, int frames = 0, int flags = -1);
+	// Same, but the slot borrows the sprite of native slot `sourceId`.
+	static void setWeaponSpriteOverrideNative(int weaponId, const std::string &weaponName, int targetId, int sourceId);
+	// The active worm selected, aimed or fired weapon `weaponId` (-1: none or
+	// unknown). Swaps that weapon's override sprites in, everyone else's out.
+	static void onActiveWeapon(int weaponId);
+	// DestroySprite hook helper: `sprite` is about to be destroyed. Returns the
+	// sprite to destroy instead (the native it displaced when `sprite` is one
+	// of ours still sitting in a slot), or `sprite` itself.
+	static Sprites *onDestroyWeaponSprite(Sprites *sprite);
+	// Before WA tears the sprite table down: put every native back and free
+	// the weapon sprites, which no slot owns.
+	static void onDestroyGlobalContext();
 	// ProjectX LoadSprite(file, frames, ...) frame count, keyed by resolved path.
 	static int frameHintFor(const std::string &resolved) {
 		auto it = frameHints.find(resolved);

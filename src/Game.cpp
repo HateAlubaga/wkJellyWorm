@@ -123,6 +123,7 @@ int __stdcall Game::hookConstructGlobalContext(int a1) {
 
 int (__fastcall *origDestroyGlobalContext)(int This, int EDX);
 int __fastcall Game::hookDestroyGlobalContext(int This, int EDX) {
+	Sprites::onDestroyGlobalContext();
 	CustomWeapons::onDestroyGlobalContext();
 	Music::shutdown();
 	int ret = origDestroyGlobalContext(This, EDX);
