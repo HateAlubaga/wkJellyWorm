@@ -1338,6 +1338,17 @@ int CustomWeapons::registerCustomWeaponLua(sol::object weaponObj, std::string im
 }
 
 int CustomWeapons::registerCustomWeapon(CustomWeapons::WeaponStruct weaponStruct, std::string img, std::string name1, std::string name2) {
+	// Weapon type 0 (0x30) is not a weapon WA can fire. The ported packages
+	// make these from hand-written draft code (a zeroed WeaponStruct, or a
+	// ProjectX "-- Sounds --" dummy); they show up as broken panel entries,
+	// and a draft re-registering an existing name would wipe the real struct.
+	if(weaponStruct.unknown30 == 0 || name1.empty()) {
+		auto same = customWeaponIdByKey.find(name1 + '\x01' + name2);
+		PxWeaponArt::log("registerCustomWeapon: skipped '%s':'%s' (weapon type 0 / no name)%s\n",
+			name1.c_str(), name2.c_str(), same != customWeaponIdByKey.end() ? ", kept existing" : "");
+		return same != customWeaponIdByKey.end() ? same->second : -1;
+	}
+
 	std::string key = name1 + '\x01' + name2;
 	PxWeaponArt::Art art;
 	bool hasArt = PxWeaponArt::find(reinterpret_cast<const int *>(&weaponStruct), sizeof(weaponStruct), name1, art);
