@@ -2,6 +2,8 @@
 #include "../../Constants.h"
 #include "CTaskWorm.h"
 #include "../../Lua.h"
+#include "../../CustomWeapons.h"
+#include "../../MemAccess.h"
 
 #include <sol/sol.hpp>
 
@@ -227,5 +229,29 @@ int CTaskWorm::install(SignatureScanner &signatureScanner, module mod) {
 	ut["unknown3F0"] = &CTaskWorm::unknown3F0;
 	ut["unknown3F4"] = &CTaskWorm::unknown3F4;
 	ut["unknown3F8"] = &CTaskWorm::unknown3F8;
+
+	// Worm state machine: calls the worm's own vtable SetState (+0x38).
+	lua->set_function("wormSetState", [](DWORD worm, int state) -> bool {
+		if(!worm || !jellyProbeRead(worm, 0x400))
+			return false;
+		DWORD vt = *(DWORD*)worm;
+		if(!jellyProbeRead(vt + 0x38, sizeof(DWORD)))
+			return false;
+		typedef void (__fastcall *SetStateFn)(DWORD, DWORD, int);	// thiscall via fastcall + dummy edx
+		((SetStateFn)*(DWORD*)(vt + 0x38))(worm, 0, state);
+		return true;
+	});
+	// Weapon id of what the worm currently holds (+0x36C WeaponStruct*), -1 if none.
+	lua->set_function("getWormWeaponId", [](DWORD worm) -> int {
+		if(!worm || !jellyProbeRead(worm + 0x36C, sizeof(DWORD)))
+			return -1;
+		CustomWeapons::WeaponStruct *ws = *(CustomWeapons::WeaponStruct**)(worm + 0x36C);
+		if(!ws || !jellyProbeRead((DWORD)ws, sizeof(DWORD)))
+			return -1;
+		return CustomWeapons::weaponIdOf(ws);
+	});
+	lua->set_function("weaponIdByName", [](const std::string &name) -> int {
+		return CustomWeapons::weaponIdByName(name);
+	});
 	return 0;
 }
