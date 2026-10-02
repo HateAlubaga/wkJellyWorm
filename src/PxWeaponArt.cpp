@@ -389,7 +389,9 @@ void CustomWeapons::assignPxArt() {
 		const std::string &file = entry.second.aimFile;
 		if(file.empty())
 			continue;
-		int id = Sprites::registerCustomSpriteWithReserve(file, reserve);
+		// Aim angle runs 0 (down) .. 0x10000 (up). Clamp (flags 0) so the
+		// straight-up angle stays on the last frame instead of wrapping to frame 0.
+		int id = Sprites::registerCustomSpriteWithReserve(file, reserve, 0, 0);
 		if(id > 0) {
 			customAimSprites[entry.first] = id;
 			aims++;

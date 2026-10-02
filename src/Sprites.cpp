@@ -557,7 +557,7 @@ int Sprites::customSpriteIdsLeft() {
 	return kMaxSpriteId - (customSpriteStartingId + (int)customSprites.size()) + 1;
 }
 
-int Sprites::registerCustomSpriteWithReserve(const std::string &filename, int reserve, int frames) {
+int Sprites::registerCustomSpriteWithReserve(const std::string &filename, int reserve, int frames, int flags) {
 	if(!Config::customSpritesEnabled)
 		return 0;
 	std::string resolved = Utils::resolveAssetPath(filename);
@@ -566,7 +566,7 @@ int Sprites::registerCustomSpriteWithReserve(const std::string &filename, int re
 		return existing->second;
 	if(customSpriteIdsLeft() <= reserve)
 		return 0;
-	return registerCustomSprite(filename, frames);
+	return registerCustomSprite(filename, frames, flags);
 }
 
 void Sprites::resetConfig() {

@@ -14,6 +14,7 @@
 #include "PxWeaponArt.h"
 #include "Sprites.h"
 #include <algorithm>
+#include <cstdarg>
 #include <array>
 #include <filesystem>
 #include "sol/sol.hpp"
@@ -1503,6 +1504,177 @@ void __declspec(naked) hookWormAimSprite() {
 	_asm jmp addrWormAimSprite_resume
 }
 
+// ---------------------------------------------------------------------------
+// Aim pose follow-up
+//
+// WA's per-frame aim update (0x51CFC0, esi = worm, no stack arguments, plain
+// `ret`) turns the weapon-hold pose towards the aim angle: it reads the worm
+// animator's current sprite and phase (animator vtable +0x0C), and when the
+// sprite equals the worm aim sprite lookup (0x51C060) it eases the phase
+// towards the aim angle at +0x24C and stores it (vtable +0x10). It bails out
+// early when the aim mode (+0x268) or the selected weapon (+0x170) is 0, and
+// skips the phase store when the sprites differ. Ported ProjectX weapons that
+// fall back to the bazooka pose (0x20D) or carry their own aim art kept that
+// pose pointing down while the crosshair turned. The call to the update is
+// redirected through a stub that records the phase before it runs and, for
+// custom weapons only, applies WA's own easing step afterwards when WA left
+// the phase untouched. A custom weapon whose animator stays on a different
+// sprite in the idle state is switched back to its aim sprite.
+// Everything decided here is mirrored into jelly\aimpose.log (only on change).
+
+static DWORD addrAimUpdate;
+static DWORD addrWormAimSpriteEntry;
+static int aimPoseSprite0;
+static int aimPoseLogLines;
+static std::map<DWORD, int> aimPoseMismatchFrames;
+
+static void aimPoseLog(const char *fmt, ...) {
+	static bool firstWriteThisProcess = true;
+	if(aimPoseLogLines >= 400)
+		return;
+	aimPoseLogLines++;
+	va_list args;
+	va_start(args, fmt);
+	FILE *f = nullptr;
+	if(fopen_s(&f, "jelly\\aimpose.log", firstWriteThisProcess ? "w" : "a") == 0 && f) {
+		if(firstWriteThisProcess)
+			fprintf(f, "=== aim pose session pid=%lu tick=%lu ===\n", GetCurrentProcessId(), GetTickCount());
+		vfprintf(f, fmt, args);
+		fclose(f);
+		firstWriteThisProcess = false;
+	}
+	va_end(args);
+}
+
+typedef void (__thiscall *WormAnimGetFn)(DWORD anim, int *sprite, int *phase);
+typedef void (__thiscall *WormAnimSetPhaseFn)(DWORD anim, int phase);
+typedef void (__thiscall *WormAnimSetFn)(DWORD anim, int sprite, int phase);
+
+static bool wormAnimGet(DWORD anim, int &sprite, int &phase) {
+	sprite = 0;
+	phase = 0;
+	if(!anim || !jellyProbeRead(anim, sizeof(DWORD)))
+		return false;
+	DWORD vt = *(DWORD *)anim;
+	if(!vt || !jellyProbeRead(vt + 0x0C, sizeof(DWORD)))
+		return false;
+	((WormAnimGetFn)*(DWORD *)(vt + 0x0C))(anim, &sprite, &phase);
+	return true;
+}
+
+// The lookup takes the WeaponStruct in eax and the worm on the stack (`ret 4`).
+// Going through its entry also runs our hookWormAimSprite, so the answer is
+// the same one WA's update compares against.
+static int __declspec(naked) __stdcall callWormAimSprite(DWORD ws, DWORD worm) {
+	_asm mov eax, dword ptr [esp + 4]
+	_asm push dword ptr [esp + 8]
+	_asm call addrWormAimSpriteEntry
+	_asm ret 8
+}
+
+static int __stdcall aimPoseBefore(DWORD worm) {
+	int sprite, phase;
+	if(!wormAnimGet(*(DWORD *)(worm + 0x368), sprite, phase)) {
+		aimPoseSprite0 = -1;
+		return 0;
+	}
+	aimPoseSprite0 = sprite;
+	return phase;
+}
+
+static void __stdcall aimPoseAfter(DWORD worm, int phase0) {
+	typedef CustomWeapons CW;
+	if(!CW::customWeaponsEnabled || aimPoseSprite0 < 0)
+		return;
+	DWORD wsAddr = *(DWORD *)(worm + 0x36C);
+	if(!wsAddr || !jellyProbeRead(wsAddr, 0x64))
+		return;
+	CW::WeaponStruct *ws = (CW::WeaponStruct *)wsAddr;
+	int idx = CW::weaponIdOf(ws);
+	if(idx < CW::maxStandardWeapons || idx >= CW::numAllWeapons)
+		return;
+	DWORD anim = *(DWORD *)(worm + 0x368);
+	int sprite, phase;
+	if(!wormAnimGet(anim, sprite, phase))
+		return;
+	int expected = callWormAimSprite(wsAddr, worm);
+	int target = *(int *)(worm + 0x24C);
+	int aimMode = *(int *)(worm + 0x268);
+	int selected = *(int *)(worm + 0x170);
+	int state = *(int *)(worm + 0x44);
+	const char *action = "none";
+
+	if(expected > 0 && sprite == expected) {
+		aimPoseMismatchFrames.erase(worm);
+		if(phase == phase0 && phase != target) {
+			int next = target;
+			if(abs(phase - target) >= 0x16C)
+				next = (int)(((long long)0x4CCC * target + (long long)0xB333 * phase) >> 16);
+			DWORD vt = *(DWORD *)anim;
+			((WormAnimSetPhaseFn)*(DWORD *)(vt + 0x10))(anim, next);
+			action = "phase";
+		}
+	} else if(expected > 0 && ws->unknown30 == 1 && aimMode != 0 && selected != 0 && state == 0x65) {
+		// Idle with an aimable custom weapon but the animator holds some other
+		// sprite. WA's draw-weapon link animations end well within a second.
+		int &frames = aimPoseMismatchFrames[worm];
+		if(++frames > 50) {
+			frames = 0;
+			DWORD vt = *(DWORD *)anim;
+			((WormAnimSetFn)*(DWORD *)(vt + 0x18))(anim, expected, 0x8000);
+			action = "reset";
+		} else {
+			action = "wait";
+		}
+	} else {
+		aimPoseMismatchFrames.erase(worm);
+	}
+
+	// Log only when the situation changes, not every frame.
+	static int last[10] = {0};
+	int now[10] = {idx, ws->unknown30, ws->unknown34, selected, aimMode, sprite, expected, state,
+		(int)(action[0]), (int)(phase == target)};
+	if(memcmp(now, last, sizeof(now)) != 0 || action[0] == 'r') {
+		memcpy(last, now, sizeof(now));
+		aimPoseLog("worm=%08X wpn=%d type=%d sub=%d sel=%d aimMode=%d state=0x%X sprite=%d(before %d) expected=%d phase0=0x%X phase=0x%X aim=0x%X action=%s\n",
+			worm, idx, ws->unknown30, ws->unknown34, selected, aimMode, state, sprite, aimPoseSprite0, expected,
+			phase0, phase, target, action);
+	}
+}
+
+// Replaces `call 0x51CFC0` in the worm frame handler. All registers are kept:
+// the update clobbers eax/ecx/edx but the caller reloads what it needs.
+void __declspec(naked) hookAimUpdateCall() {
+	_asm pushad
+	_asm push esi
+	_asm call aimPoseBefore
+	_asm push eax // phase0, second argument of aimPoseAfter
+	_asm call addrAimUpdate // esi still holds the worm
+	_asm push esi
+	_asm call aimPoseAfter
+	_asm popad
+	_asm ret
+}
+
+static void installAimPoseHook(DWORD addrWormAimSprite) {
+	DWORD site;
+	try {
+		addrAimUpdate = Hooks::scanPattern("WormAimUpdate", "\x8B\x8E\x68\x03\x00\x00\x8B\x01\x8B\x40\x0C\x83\xEC\x08\x53\x55\x57", "xxxxxxxxxxxxxxxxx", 0x51CFC0);
+		site = Hooks::scanPattern("WormAimUpdateCall", "\xE8\x00\x00\x00\x00\xE8\x00\x00\x00\x00\xE8\x00\x00\x00\x00\x8B\xC5\xE8\x00\x00\x00\x00\x8B\xC5\xE8", "x????x????x????xxx????xxx", 0x51582D) + 10;
+	} catch(std::exception &e) {
+		printf("installAimPoseHook: %s; aim pose follow-up disabled\n", e.what());
+		return;
+	}
+	if(*(BYTE *)site != 0xE8 || site + 5 + *(int *)(site + 1) != addrAimUpdate) {
+		printf("installAimPoseHook: call at 0x%X does not reach 0x%X, not hooked\n", site, addrAimUpdate);
+		return;
+	}
+	addrWormAimSpriteEntry = addrWormAimSprite;
+	unsigned char op[5] = {0xE8};
+	*(int *)(op + 1) = (int)((DWORD)&hookAimUpdateCall - (site + 5));
+	Hooks::patchAsm(site, op, sizeof(op));
+}
+
 void CustomWeapons::setRopeAimRange(sol::object weapon, double minFraction, double maxFraction) {
 	RopeAimRange range = {"", -1, -1, 0, 0};
 	if(weapon.is<int>())
@@ -1646,6 +1818,7 @@ int CustomWeapons::install(SignatureScanner & signatureScanner, module mod) {
 	addrWormAimSprite_resume = addrWormAimSprite + 6;
 	Hooks::hookAsm(addrWormAimSprite, (DWORD)&hookWormAimSprite);
 	installRopeAimClampHooks();
+	installAimPoseHook(addrWormAimSprite);
 
 	DWORD addrPrepareWeaponPanelHookLoop = addrPrepareWeaponPanel + 0x100;
 	addrPrepareWeaponPanelHookLoopEndEarly = addrPrepareWeaponPanel + 0x10D;
