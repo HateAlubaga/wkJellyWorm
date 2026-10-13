@@ -391,7 +391,8 @@ void CustomWeapons::assignPxArt() {
 			continue;
 		// Aim angle runs 0 (down) .. 0x10000 (up). Clamp (flags 0) so the
 		// straight-up angle stays on the last frame instead of wrapping to frame 0.
-		int id = Sprites::registerCustomSpriteWithReserve(file, reserve, 0, 0);
+		// Still: the aim angle drives the phase, the animator must not play it.
+		int id = Sprites::registerCustomSpriteWithReserve(file, reserve, 0, Sprites::kStillSprite);
 		if(id > 0) {
 			customAimSprites[entry.first] = id;
 			aims++;

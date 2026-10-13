@@ -19533,29 +19533,43 @@ namespace sol {
 	}
 
 	namespace detail {
+		// wkJellyWorm patch: Lua callbacks stored as std::function are run from game
+		// hooks. An unprotected call let a Lua error longjmp across WA and C++ frames to
+		// whatever pcall happened to be active (or into a dead one), which crashed WA with
+		// STATUS_INVALID_UNWIND_TARGET. Call protected and rethrow as a C++ exception; every
+		// hook site catches std::exception.
 		template <typename... R>
 		struct std_shim {
-			unsafe_function lua_func_;
+			protected_function lua_func_;
 
 			std_shim(unsafe_function lua_func) : lua_func_(std::move(lua_func)) {
 			}
 
 			template <typename... Args>
 			meta::return_type_t<R...> operator()(Args&&... args) {
-				return lua_func_.call<R...>(std::forward<Args>(args)...);
+				protected_function_result res = lua_func_(std::forward<Args>(args)...);
+				if (!res.valid()) {
+					error err = res;
+					throw err;
+				}
+				return res.template get<meta::return_type_t<R...>>();
 			}
 		};
 
 		template <>
 		struct std_shim<void> {
-			unsafe_function lua_func_;
+			protected_function lua_func_;
 
 			std_shim(unsafe_function lua_func) : lua_func_(std::move(lua_func)) {
 			}
 
 			template <typename... Args>
 			void operator()(Args&&... args) {
-				lua_func_.call<void>(std::forward<Args>(args)...);
+				protected_function_result res = lua_func_(std::forward<Args>(args)...);
+				if (!res.valid()) {
+					error err = res;
+					throw err;
+				}
 			}
 		};
 	} // namespace detail

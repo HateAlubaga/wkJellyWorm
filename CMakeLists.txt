@@ -3,6 +3,14 @@ project(wkJellyWorm)
 
 set(CMAKE_CXX_STANDARD 17)
 
+# /EHa: sol2's catch(...) in its Lua trampolines then also catches access violations
+# raised inside bound functions and turns them into Lua errors in the faulting call.
+# With /EHsc such a fault unwound past Lua frames to some outer handler, leaving
+# lua_State->errorJmp dangling (WA crash 0xC0000029 on 2026-10-10). Test: pxrt_dev/ehtest.
+if(MSVC)
+    string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+endif()
+
 set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC ON CACHE BOOL "" FORCE)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/libxmp/CMakeLists.txt")
@@ -56,6 +64,7 @@ add_library(wkJellyWorm SHARED
         src/CustomWeapons.cpp src/CustomWeapons.h
         src/Packets.cpp src/Packets.h
         src/Lua.cpp src/Lua.h
+        src/LuaNative.cpp src/LuaNative.h
         src/packages/Package.cpp src/packages/Package.h
         src/packages/PackageManager.cpp src/packages/PackageManager.h
         src/Utils.cpp src/Utils.h
@@ -91,7 +100,7 @@ add_library(wkJellyWorm SHARED
         src/entities/gametasks/CTaskOldWorm.cpp src/entities/gametasks/CTaskOldWorm.h
 
         src/Sounds.cpp src/Sounds.h
-        src/Music.cpp src/Music.h
+        src/Music.cpp src/Music.h src/MusicOnline.cpp src/MusicOnline.h src/SchemeBind.cpp src/SchemeBind.h
         src/Sprites.cpp src/Sprites.h
         src/PxWeaponArt.cpp src/PxWeaponArt.h
         src/WaLibc.cpp src/WaLibc.h
@@ -103,6 +112,7 @@ add_library(wkJellyWorm SHARED
         src/renderer/GLDraw.cpp src/renderer/GLDraw.h
         src/FrameScheduler.cpp src/FrameScheduler.h
         src/Hud.cpp src/Hud.h
+        src/QuadRender.cpp src/QuadRender.h
         src/MemAccess.cpp src/MemAccess.h
         src/CrashReporter.cpp src/CrashReporter.h
         src/JellyRNG.cpp src/JellyRNG.h)

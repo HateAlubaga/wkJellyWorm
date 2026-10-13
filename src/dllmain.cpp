@@ -34,6 +34,7 @@
 #include "Sounds.h"
 #include "Sprites.h"
 #include "Music.h"
+#include "SchemeBind.h"
 #include "Explosions.h"
 #include "Weapons.h"
 #include "renderer/Bitmap.h"
@@ -46,6 +47,8 @@
 #include "Hooks.h"
 #include "FrameScheduler.h"
 #include "Hud.h"
+#include "QuadRender.h"
+#include "LuaNative.h"
 #include "LobbyGui.h"
 #include "JellyRNG.h"
 #include <chrono>
@@ -96,6 +99,7 @@ int install() {
 	Chat::install(SigScanner, mod);
 	Sounds::install(SigScanner, mod);
 	Music::install(SigScanner, mod);
+	SchemeBind::install(SigScanner, mod);
 	Sprites::install(SigScanner, mod);
 	Landscape::install(SigScanner, mod);
 	Explosions::install(SigScanner, mod);
@@ -108,6 +112,8 @@ int install() {
 
 	Lua::getInstance();
 	Hud::install();
+	QuadRender::install();
+	LuaNative::install();
 	FrameScheduler::install();
 	JellyRNG::install(SigScanner, mod);
 	LobbyGui::install(SigScanner, mod);

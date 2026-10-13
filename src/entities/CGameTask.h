@@ -64,6 +64,56 @@ public:
 		static void registerCallbackVt44(t_vt44 cb) {vtable44_callbacks.push_back(cb);}
 		static void registerCallbackVt48(t_vt48 cb) {vtable48_callbacks.push_back(cb);}
 
+		// Call the unhooked implementation directly (PX `super` inside overrides).
+		static int callOriginalVt1C(T * This, int a2, int a3) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int,int)>;
+			return ((vPtr)vtable_original[0])(This, 0, a2, a3);
+		}
+		static int callOriginalVt20(T * This, int a2, int a3) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int,int)>;
+			return ((vPtr)vtable_original[1])(This, 0, a2, a3);
+		}
+		static int callOriginalVt24(T * This, int a2) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int)>;
+			return ((vPtr)vtable_original[2])(This, 0, a2);
+		}
+		static int callOriginalVt28(T * This, int a2) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int)>;
+			return ((vPtr)vtable_original[3])(This, 0, a2);
+		}
+		static int callOriginalVt2C(T * This, int a2, int a3) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int,int)>;
+			return ((vPtr)vtable_original[4])(This, 0, a2, a3);
+		}
+		static int callOriginalVt30(T * This) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int)>;
+			return ((vPtr)vtable_original[5])(This, 0);
+		}
+		static int callOriginalVt34(T * This) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int)>;
+			return ((vPtr)vtable_original[6])(This, 0);
+		}
+		static int callOriginalVt38(T * This, int a2) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int)>;
+			return ((vPtr)vtable_original[7])(This, 0, a2);
+		}
+		static int callOriginalVt3C(T * This) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int)>;
+			return ((vPtr)vtable_original[8])(This, 0);
+		}
+		static int callOriginalVt40(T * This) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int)>;
+			return ((vPtr)vtable_original[9])(This, 0);
+		}
+		static int callOriginalVt44(T * This, int a2, int a3, int a4) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int,int,int)>;
+			return ((vPtr)vtable_original[10])(This, 0, a2, a3, a4);
+		}
+		static int callOriginalVt48(T * This) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int)>;
+			return ((vPtr)vtable_original[11])(This, 0);
+		}
+
 
 		static void clearCallbacks() {
 			vtable1C_callbacks.clear();
@@ -294,6 +344,18 @@ public:
 	lua->set_function(#classname "_RegisterCallback_vtable40", &CGameTask_vtableHooks<classname>::registerCallbackVt40); \
 	lua->set_function(#classname "_RegisterCallback_vtable44", &CGameTask_vtableHooks<classname>::registerCallbackVt44); \
 	lua->set_function(#classname "_RegisterCallback_vtable48", &CGameTask_vtableHooks<classname>::registerCallbackVt48); \
+	lua->set_function(#classname "_CallOriginal_vtable1C", &CGameTask_vtableHooks<classname>::callOriginalVt1C); \
+	lua->set_function(#classname "_CallOriginal_vtable20", &CGameTask_vtableHooks<classname>::callOriginalVt20); \
+	lua->set_function(#classname "_CallOriginal_vtable24", &CGameTask_vtableHooks<classname>::callOriginalVt24); \
+	lua->set_function(#classname "_CallOriginal_vtable28", &CGameTask_vtableHooks<classname>::callOriginalVt28); \
+	lua->set_function(#classname "_CallOriginal_vtable2C", &CGameTask_vtableHooks<classname>::callOriginalVt2C); \
+	lua->set_function(#classname "_CallOriginal_vtable30", &CGameTask_vtableHooks<classname>::callOriginalVt30); \
+	lua->set_function(#classname "_CallOriginal_vtable34", &CGameTask_vtableHooks<classname>::callOriginalVt34); \
+	lua->set_function(#classname "_CallOriginal_vtable38", &CGameTask_vtableHooks<classname>::callOriginalVt38); \
+	lua->set_function(#classname "_CallOriginal_vtable3C", &CGameTask_vtableHooks<classname>::callOriginalVt3C); \
+	lua->set_function(#classname "_CallOriginal_vtable40", &CGameTask_vtableHooks<classname>::callOriginalVt40); \
+	lua->set_function(#classname "_CallOriginal_vtable44", &CGameTask_vtableHooks<classname>::callOriginalVt44); \
+	lua->set_function(#classname "_CallOriginal_vtable48", &CGameTask_vtableHooks<classname>::callOriginalVt48); \
 	lua->set_function(#classname "_CastCGameTask", &castCGameTask<classname>);
 
 	int unknown30; // 0x30

@@ -10,6 +10,8 @@
 #include "MemAccess.h"
 
 #include "Config.h"
+#include "Music.h"
+#include "SchemeBind.h"
 #include "Hooks.h"
 #include "Lua.h"
 
@@ -66,16 +68,27 @@ int __fastcall Lobby::hookLobbyHostCommands(void *This, void *EDX, char **comman
 			"/enable <package> - enable wkJellyWorm lua package (/enable rev = jellyreverse v2)\n" \
 			"/disable <package> - disable wkJellyWorm lua package (/disable rev)\n" \
 			"/jpx [list|enable <sbornik>|disable <sbornik>|reload] - PX scheme bundles from jelly/jpx (93 schemes)\n" \
+			"/sb [list|<part of name>|off] - play one PX bundle: only its packages on, everything else off\n" \
 			"/packages gui - open package picker overlay in lobby (same as /enable via list)\n" \
 			"/autostart [scan|list|add <pkg> [-v version]|remove <pkg>|clear] - packages auto-enabled in single player / on lobby entry\n" \
 			"  scan quickly writes package directory names as name=0 (no manifest parsing; not done automatically on startup)\n" \
 			"  edit [autostart] section in wkJellyWorm.ini directly: name=0 off, name=1 latest, name=1.2.3 pinned\n" \
 			"  [general] ScanAllPackages=0 in wkJellyWorm.ini: skip the full jelly/packages scan on startup,\n" \
 			"    load only [autostart] entries with value != 0; /enable <name> loads that package by folder name\n" \
+			"/scheme [bind|unbind|list|apply] - bind modules to the scheme picked in the lobby (see /scheme)\n" \
+			"/music [new|play|stop|pause|resume|next|vol N|list|cache|status] - tracker music, /music new = a new random track (see [music] in wkJellyWorm.ini)\n" \
 			"/jelly - show your wkJellyWorm version\n" \
 			"/jelly api - dump Lua API to jelly/api.txt\n" \
 			"/vt - list CTask tree (dev console only)"
 			);
+		return 1;
+	}
+	if(command == "scheme") {
+		showGreenText(This, SchemeBind::handleCommand(args));
+		return 1;
+	}
+	if(command == "music") {
+		showGreenText(This, Music::handleCommand(args));
 		return 1;
 	}
 	if(command == "jelly") {
@@ -143,6 +156,14 @@ int __fastcall Lobby::hookLobbyClientCommands(void *This, void *EDX, char **comm
 		addrLobbyClientObj = (DWORD)This;
 	flushPendingClientCaps();
 
+	if(command == "scheme") {
+		showGreenText(This, SchemeBind::handleCommand(args));
+		return 1;
+	}
+	if(command == "music") {
+		showGreenText(This, Music::handleCommand(args));
+		return 1;
+	}
 	if(command == "jelly") {
 		while(!args.empty() && (args[0] == ' ' || args[0] == '\t'))
 			args.erase(0, 1);
@@ -326,10 +347,32 @@ int __stdcall Lobby::hookLobbyDisplayMessage(int a1, char *msg) {
 	}
 	return origLobbyDisplayMessage(a1, msg);
 }
+// Results of music downloads (Music::announce) arrive on worker threads and must not touch the UI
+// from there. A WM_TIMER callback runs on the thread that created the timer (the game's UI thread),
+// the same thread that runs the lobby chat commands. In a match FrameScheduler shows them instead.
+void __stdcall Lobby::showMusicAnnouncements(HWND, UINT, UINT_PTR, DWORD) {
+	if(!Music::hasAnnouncements() || Music::inMatch())
+		return;
+	void *lobbyObj = nullptr;
+	if(currentFrontendScreen == 1704 && addrLobbyHostObj)
+		lobbyObj = (void *)addrLobbyHostObj;
+	else if(currentFrontendScreen == 1706 && addrLobbyClientObj)
+		lobbyObj = (void *)addrLobbyClientObj;
+	if(!lobbyObj || !isValidLobbyObj(lobbyObj))
+		return;
+	for(const auto &note : Music::takeAnnouncements())
+		showGreenText(lobbyObj, note);
+}
+
 void (__stdcall *origFrontendChangeScreen)(int screen);
 void __stdcall Lobby::hookFrontendChangeScreen(int screen) {
 	int sesi;
 	_asm mov sesi, esi
+
+	// The timer must be created on the UI thread; this hook runs there. Once.
+	static bool announceTimerStarted = false;
+	if(!announceTimerStarted)
+		announceTimerStarted = SetTimer(nullptr, 0, 500, showMusicAnnouncements) != 0;
 
 	Game::probeAndInvalidateStalePointers();
 
@@ -372,6 +415,9 @@ void __stdcall Lobby::hookFrontendChangeScreen(int screen) {
 			}
 			if(screen == 1704)
 				Config::loadSessionConfig();
+			if(screen == 1704 || screen == 1706)
+				Music::onLobbyEnter();
+			SchemeBind::onScreenEnter(screen);
 			break;
 		default:
 			break;

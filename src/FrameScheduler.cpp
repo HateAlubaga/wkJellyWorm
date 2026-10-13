@@ -1,20 +1,27 @@
 #include "FrameScheduler.h"
 #include "packages/PackageManager.h"
+#include "Chat.h"
 #include "Hud.h"
 #include "Input.h"
 #include "Lua.h"
+#include "Music.h"
 #include <sol/sol.hpp>
 
 void FrameScheduler::install() {
 	CTaskTurnGame::registerBuiltinCallbackVt8(&onTurnGameVt8);
 
 	auto *lua = Lua::getInstance().getState();
-	lua->set_function("jellySchedule", [](unsigned int delayMs, unsigned int intervalMs, sol::function fn) -> int {
+	lua->set_function("jellySchedule", [](unsigned int delayMs, unsigned int intervalMs, sol::protected_function fn) -> int {
 		if(!fn.valid())
 			return 0;
 		return FrameScheduler::schedule(delayMs, intervalMs, [fn]() mutable {
 			try {
-				fn();
+				// Protected: an unprotected Lua error here would longjmp out of a WA render hook.
+				sol::protected_function_result res = fn();
+				if(!res.valid()) {
+					sol::error err = res;
+					printf("jellySchedule callback: %s\n", err.what());
+				}
 			} catch(const std::exception &e) {
 				printf("jellySchedule callback: %s\n", e.what());
 			} catch(...) {
@@ -47,6 +54,10 @@ void FrameScheduler::onRenderScene() {
 	lastTick = tick;
 
 	tickTimers(tick);
+	if(Music::hasAnnouncements()) {
+		for(const auto &note : Music::takeAnnouncements())
+			Chat::callShowChatMessage(note, 6);
+	}
 	PackageManager::Callbacks<&PackageManager::onFrame_t>::callCallbacks();
 	Hud::flushDrawQueue();
 }

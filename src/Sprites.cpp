@@ -163,11 +163,15 @@ static bool patchSpriteFromImageFile(Sprites *sprite, const std::string &file, i
 	// flag bit 0 and mirrored by bit 1 (WA.exe 0x4FAD30). A non-zero dword24
 	// switches to a range mode that always shows frame 0, which is wrong
 	// for a vertical strip, so clear it.
-	spriteLog("custom sprite '%s': template flags=0x%X dword1C=%d dword20=%d dword24=%d\n",
-		file.c_str(), sprite->flags_word10, sprite->dword1C, sprite->dword20, sprite->dword24);
+	spriteLog("custom sprite '%s': template flags=0x%X speed=0x%X:%X dword1C=%d dword20=%d dword24=%d\n",
+		file.c_str(), sprite->flags_word10, sprite->fps_wordA, sprite->word8, sprite->dword1C, sprite->dword20, sprite->dword24);
 	sprite->dword24 = 0;
 	WORD animBits = (WORD)(flagHint >= 0 ? (flagHint & 3) : 1);
 	sprite->flags_word10 = (WORD)((sprite->flags_word10 & ~3) | animBits);
+	if(flagHint >= 0 && (flagHint & Sprites::kStillSprite)) {
+		sprite->word8 = 0;
+		sprite->fps_wordA = 0;
+	}
 	sprite->width_wordC = (WORD)width;
 	sprite->height_wordE = (WORD)frameHeight;
 	sprite->max_frames_word16 = (WORD)frames;
@@ -795,6 +799,19 @@ static int toPhase(double f, int spriteIndex) {
 	return (int)phase;
 }
 
+int Sprites::framePhase(double frame, int spriteIndex) {
+	return toPhase(frame, spriteIndex);
+}
+
+bool Sprites::cellSize(int spriteIndex, int &w, int &h) {
+	Sprites *sprite = spriteForDraw(spriteIndex);
+	if(!sprite)
+		return false;
+	w = sprite->width_wordC;
+	h = sprite->height_wordE;
+	return true;
+}
+
 static void drawSpriteChecked(const char *name, sol::variadic_args &va,
                               void (*draw)(int, int, int, int, int)) {
 	static std::unordered_map<std::string, bool> reported;
@@ -873,24 +890,25 @@ DWORD __fastcall hookDestroySprite(Sprites* sprite, int, int flags) {
 	if(alias == Sprites::aliases.end())
 		return destroyOneSprite(sprite, flags);
 
-	// First destroy frees the shared object; every later one belongs to a
-	// slot that only borrowed it, so free that slot's original instead.
+	// WA tears the table down slot by slot and reads each slot's vtable before
+	// calling it, so the shared object must outlive every slot that holds it:
+	// it is freed with the last slot's destroy. Each earlier destroy frees one
+	// displaced original instead (freeing the shared object first left the
+	// later slots dangling: crash on leaving a match).
 	auto &info = alias->second;
-	int index = info.destroyed++;
-	Sprites *victim = sprite;
-	if(index > 0) {
-		victim = nullptr;
+	info.destroyed++;
+	if(info.destroyed < info.slots) {
+		Sprites *victim = nullptr;
 		if(!info.originals.empty()) {
 			victim = info.originals.back();
 			info.originals.pop_back();
 		}
+		return victim ? destroyOneSprite(victim, flags) : 0;
 	}
 	std::vector<Sprites *> leftovers;
-	if(info.destroyed >= info.slots) {
-		leftovers.swap(info.originals);
-		Sprites::aliases.erase(alias);
-	}
-	DWORD ret = victim ? destroyOneSprite(victim, flags) : 0;
+	leftovers.swap(info.originals);
+	Sprites::aliases.erase(alias);
+	DWORD ret = destroyOneSprite(sprite, flags);
 	for(auto *original : leftovers)
 		destroyOneSprite(original, flags);
 	return ret;

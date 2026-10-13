@@ -110,6 +110,7 @@ int __stdcall Game::hookConstructGlobalContext(int a1) {
 	Sprites::onConstructGlobalContext(a1);
 	CustomWeapons::onConstructGlobalContext(a1);
 	Renderer::onConstructGlobalContext(a1);
+	Music::onMatchStart();
 
 
 	auto addrGameGlobal = getAddrGameGlobal();

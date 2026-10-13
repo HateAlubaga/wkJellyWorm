@@ -12,6 +12,7 @@
 #include "Sounds.h"
 #include "Sprites.h"
 #include "Music.h"
+#include "SchemeBind.h"
 #include "JellyRNG.h"
 
 namespace fs = std::filesystem;
@@ -27,7 +28,7 @@ void Config::onConstructGlobalContext(int a1) {
 }
 
 void Config::createJellyDirs() {
-	auto dirs = {jellyDir, schemeDir, luaLibDir, packageDir, jpxDir, packageDataDir, musicCacheDir};
+	auto dirs = {jellyDir, schemeDir, luaLibDir, packageDir, jpxDir, packageDataDir, musicDir, musicCacheDir};
 	for (auto & dir : dirs) {
 		fs::create_directories(dir);
 	}
@@ -78,6 +79,7 @@ int Config::loadConfigFromFile(std::string & filename) {
 		in.close();
 		parseConfigString((char*)buffer.str().c_str());
 		PackageManager::getInstance().markAllEnabledExplicit();
+		SchemeBind::onConfigReset();
 		return 0;
 	}
 	return -1;
@@ -232,6 +234,7 @@ void Config::resetConfig() {
 	Sounds::resetConfig();
 	Sprites::resetConfig();
 	Music::resetConfig();
+	SchemeBind::onConfigReset();
 }
 
 std::string Config::getConfigString(int indent, bool host) {
@@ -307,6 +310,7 @@ void Config::readPrivateProfile() {
 	signatureMismatchWarning = GetPrivateProfileIntA("debug", "SignatureMismatchWarning", 0, iniFile.c_str());
 
 	rendererEnabled = GetPrivateProfileIntA("renderer", "EnableCustomRenderer", 0, iniFile.c_str());
+	quadRenderEnabled = GetPrivateProfileIntA("renderer", "EnableQuadRender", 1, iniFile.c_str());
 	rendererDebugContext = GetPrivateProfileIntA("renderer", "DebugContext", 0, iniFile.c_str());
 	rendererGLMajor = GetPrivateProfileIntA("renderer", "GLVersionMajor", 3, iniFile.c_str());
 	rendererGLMinor = GetPrivateProfileIntA("renderer", "GLVersionMinor", 2, iniFile.c_str());
@@ -317,6 +321,7 @@ void Config::readPrivateProfile() {
 	customSpritesEnabled = GetPrivateProfileIntA("general", "CustomSprites", 0, iniFile.c_str());
 	pngBitmapLoaderEnabled = GetPrivateProfileIntA("general", "PngBitmapLoader", 0, iniFile.c_str());
 	selfTestEnabled = GetPrivateProfileIntA("general", "SelfTest", 0, iniFile.c_str());
+	Music::readConfig();
 }
 
 namespace JellyConfig {

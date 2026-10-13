@@ -115,6 +115,11 @@ public:
 	static void onConstructGlobalContext(int a1);
 	static int install(SignatureScanner &, module);
 	static int registerCustomSprite(std::string filename, int frames = 0, int flags = -1);
+	// Flag for registerCustomSprite: the sprite never plays by itself. WA's
+	// animator takes the dword at +8 as its playback speed and ignores
+	// SetPhase while it is non-zero (0x4F53F0), so a worm aim sprite with the
+	// template's speed spins on its own instead of following the aim angle.
+	static const int kStillSprite = 0x100;
 	// Like registerCustomSprite, but only takes a new id while more than
 	// `reserve` ids of the 851..1023 range stay free. Returns 0 otherwise.
 	static int registerCustomSpriteWithReserve(const std::string &filename, int reserve, int frames = 0, int flags = -1);
@@ -123,6 +128,10 @@ public:
 	static void resetConfig();
 	static void callDrawSpriteLocal(int posy, int layer, int posx, int sprite, int frame);
 	static void callDrawSpriteGlobal(int posy, int layer, int posx, int sprite, int frame);
+	// Frame argument as ProjectX passes it (index, 0..1 fraction or raw phase) to WA's 16-bit phase.
+	static int framePhase(double frame, int spriteIndex);
+	// Cell size (width, height) of the sprite in slot spriteIndex; false when the slot is empty.
+	static bool cellSize(int spriteIndex, int &w, int &h);
 
 	// ProjectX SetSpriteOverride(id, LoadSprite(file)): the image never needs a
 	// custom id of its own, so it does not eat the small 851..1023 range.

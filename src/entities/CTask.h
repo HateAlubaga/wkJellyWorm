@@ -56,6 +56,37 @@ public:
 		static void registerCallbackVt14(t_vt14 cb) {vtable14_callbacks.push_back(cb);}
 		static void registerCallbackVt18(t_vt18 cb) {vtable18_callbacks.push_back(cb);}
 
+		// Call the unhooked implementation directly (PX `super` inside overrides).
+		// The Lua callback then returns nonzero so the original is not run twice.
+		static int callOriginalVt0(T * This, int a2) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int)>;
+			return ((vPtr)vtable_original[0])(This, 0, a2);
+		}
+		static int callOriginalVt4(T * This, int heap) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int)>;
+			return ((vPtr)vtable_original[1])(This, 0, heap);
+		}
+		static int callOriginalVt8(T * This, CTask * sender, int mtype, size_t size, DWORD data) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,CTask*,Constants::TaskMessage, size_t, void*)>;
+			return ((vPtr)vtable_original[2])(This, 0, sender, (Constants::TaskMessage)mtype, size, (void*)data);
+		}
+		static int callOriginalVtC(T * This, int a2, int a3, int a4) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int,int,int)>;
+			return ((vPtr)vtable_original[3])(This, 0, a2, a3, a4);
+		}
+		static int callOriginalVt10(T * This, int a2, int a3, int a4) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int,int,int)>;
+			return ((vPtr)vtable_original[4])(This, 0, a2, a3, a4);
+		}
+		static int callOriginalVt14(T * This, int a2) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int,int)>;
+			return ((vPtr)vtable_original[5])(This, 0, a2);
+		}
+		static int callOriginalVt18(T * This) {
+			using vPtr = std::add_pointer_t<int __fastcall(T*,int)>;
+			return ((vPtr)vtable_original[6])(This, 0);
+		}
+
 		static void clearCallbacks() {
 			vtable0_callbacks.clear();
 			vtable4_callbacks.clear();
@@ -204,6 +235,13 @@ public:
 	lua->set_function(#classname "_RegisterCallback_vtable10", &CTask_vtableHooks<classname>::registerCallbackVt10); \
 	lua->set_function(#classname "_RegisterCallback_vtable14", &CTask_vtableHooks<classname>::registerCallbackVt14); \
 	lua->set_function(#classname "_RegisterCallback_vtable18", &CTask_vtableHooks<classname>::registerCallbackVt18); \
+	lua->set_function(#classname "_CallOriginal_vtable0", &CTask_vtableHooks<classname>::callOriginalVt0); \
+	lua->set_function(#classname "_CallOriginal_vtable4", &CTask_vtableHooks<classname>::callOriginalVt4); \
+	lua->set_function(#classname "_CallOriginal_vtable8", &CTask_vtableHooks<classname>::callOriginalVt8); \
+	lua->set_function(#classname "_CallOriginal_vtableC", &CTask_vtableHooks<classname>::callOriginalVtC); \
+	lua->set_function(#classname "_CallOriginal_vtable10", &CTask_vtableHooks<classname>::callOriginalVt10); \
+	lua->set_function(#classname "_CallOriginal_vtable14", &CTask_vtableHooks<classname>::callOriginalVt14); \
+	lua->set_function(#classname "_CallOriginal_vtable18", &CTask_vtableHooks<classname>::callOriginalVt18); \
 	lua->set_function(#classname "_CastCTask", &castCTask<classname>);
 	//int vtable;
 	CTask * parent; // 0x4

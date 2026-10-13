@@ -5,8 +5,18 @@
 #include "CTask.h"
 
 
+// Task birth log. Every CTask construction records the task's address under a running sequence number.
+// WA reuses a freed task's memory for the next task of the same size, so an address alone does not identify
+// an object; the Lua runtime reads this log to tell a newly born object from the dead one that lived at the
+// same address (the old object's script state must not leak into the new one).
+static const unsigned kBirthRing = 4096;
+static DWORD birthAddrs[kBirthRing];
+static unsigned birthSeq = 0;
+
 DWORD *(__stdcall *origConstructCTask)(DWORD *This, int a2, int a3);
 DWORD *__stdcall CTask::hookConstructCTask(DWORD *This, int a2, int a3) {
+	birthAddrs[birthSeq % kBirthRing] = (DWORD)This;
+	birthSeq++;
 	return origConstructCTask(This, a2, a3);
 }
 
@@ -71,6 +81,23 @@ int CTask::install(SignatureScanner &signatureScanner, module mod) {
 
 	Hooks::polyhook("constructCTask", addrConstructCTask, (DWORD *) &hookConstructCTask, (DWORD *) &origConstructCTask);
 	lua->set_function("getHashStoreObject", &callGetHashStoreObject);
+
+	// sequence number of the next task birth
+	lua->set_function("taskBirthSeq", []() -> unsigned { return birthSeq; });
+	// addresses of the tasks constructed since sequence number `from` (oldest first), the current sequence
+	// number, and true when births older than the ring were lost
+	lua->set_function("taskBirthsSince", [](sol::this_state s, unsigned from) {
+		sol::state_view L(s);
+		unsigned now = birthSeq;
+		bool lost = now - from > kBirthRing;
+		if(lost)
+			from = now - kBirthRing;
+		sol::table list = L.create_table((int)(now - from), 0);
+		int i = 1;
+		for(unsigned q = from; q != now; q++)
+			list[i++] = birthAddrs[q % kBirthRing];
+		return std::make_tuple(list, now, lost);
+	});
 	return 0;
 }
 

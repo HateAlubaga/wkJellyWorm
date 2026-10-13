@@ -5,11 +5,14 @@
 #include "Hooks.h"
 #include "Lua.h"
 #include "Config.h"
+#include "Music.h"
+#include "SchemeBind.h"
 #include <sol/sol.hpp>
 #include "packages/PackageManager.h"
 #include "renderer/Renderer.h"
 #include "entities/tasks/CTaskTurnGame.h"
 #include <cstring>
+#include <sstream>
 #include <vector>
 
 namespace {
@@ -106,9 +109,11 @@ int Chat::onChatInput(int a1, char * msg, int a3) {
 	}
 
 	std::string norm;
+	bool hadSlash = false;  // a chat line that merely starts with the word "music" is not a command
 	if(msg && msg[0]) {
 		norm = msg;
 		while(!norm.empty() && norm[0] == ' ') norm.erase(0, 1);
+		hadSlash = !norm.empty() && norm[0] == '/';
 		if(!norm.empty() && norm[0] != '/') norm = "/" + norm;
 	}
 
@@ -138,6 +143,28 @@ int Chat::onChatInput(int a1, char * msg, int a3) {
 		while(!args.empty() && (args[0] == ' ' || args[0] == '\t'))
 			args.erase(0, 1);
 		PackageManager::getInstance().handleAutostartCommand(nullptr, args);
+		return 1;
+	}
+
+	if(hadSlash && (norm == "/scheme" || norm.rfind("/scheme ", 0) == 0)) {
+		std::string reply = SchemeBind::handleCommand(norm.size() > 7 ? norm.substr(7) : "");
+		std::stringstream lines(reply);
+		std::string line;
+		while(std::getline(lines, line)) {
+			if(!line.empty())
+				callShowChatMessage(line, 6);
+		}
+		return 1;
+	}
+
+	if(hadSlash && (norm == "/music" || norm.rfind("/music ", 0) == 0)) {
+		std::string reply = Music::handleCommand(norm.size() > 6 ? norm.substr(6) : "");
+		std::stringstream lines(reply);
+		std::string line;
+		while(std::getline(lines, line)) {
+			if(!line.empty())
+				callShowChatMessage(line, 6);
+		}
 		return 1;
 	}
 

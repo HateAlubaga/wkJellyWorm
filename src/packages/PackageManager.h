@@ -22,6 +22,10 @@ private:
 	std::map<std::string, std::shared_ptr<Package>> enabledPackagesAll;
 	std::map<std::string, std::shared_ptr<Package>> enabledPackagesExplicit;
 	std::set<std::string> initializedPackages;
+	// /sb: explicit set (name -> version) saved before the first bundle switch, restored by /sb off
+	std::map<std::string, std::string> sbSaved;
+	bool sbActive = false;
+	std::string sbCurrent;
 	bool gameInitialized = false;
 
 	void ensureAutostartDefaultsInIni();
@@ -113,6 +117,15 @@ public:
 	void togglePackageFromGui(void *lobbyObj, const std::string &name, const std::string &version, bool enable);
 	void markAllEnabledExplicit();
 
+	// Scheme binding (SchemeBind): modules tied to the scheme picked in the WA GUI.
+	std::vector<std::string> listExplicitPackageNames() const;
+	bool isExplicitlyEnabled(const std::string &name) const;
+	static std::set<std::string> autostartEnabledNames();
+	std::string resolveModuleName(const std::string &name) const;
+	// Both return "" on success, else the error text. `name` must come from resolveModuleName.
+	std::string enableForScheme(const std::string &name, const std::string &version);
+	std::string disableForScheme(const std::string &name);
+
 
 
 	static int handleCGameTaskPhysics_t(int, CGameTask*, int);
@@ -151,6 +164,7 @@ public:
 	int applyAutostart();
 	int handleAutostartCommand(void *lobbyObj, const std::string &args);
 	int handleJpxCommand(void *lobbyObj, const std::string &args);
+	int handleSbCommand(void *lobbyObj, const std::string &args);
 
 
 	static int lobbyHostCli_t(void *, std::string&, std::string&);

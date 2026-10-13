@@ -24,6 +24,7 @@ public:
 	inline static const std::string packageDir = jellyDir + "\\packages";
 	inline static const std::string jpxDir = jellyDir + "\\jpx";
 	inline static const std::string packageDataDir = jellyDir + "\\data";
+	inline static const std::string musicDir = jellyDir + "\\music";
 	inline static const std::string musicCacheDir = jellyDir + "\\cache\\music";
 	inline static const std::string sessionConfigFile = jellyDir + "\\session.jelly";
 	inline static const std::string iniFile = ".\\wkJellyWorm.ini";
@@ -64,6 +65,7 @@ public:
 	inline static int autoInterceptFrontend = 1;
 
 	inline static int rendererEnabled = 0;
+	inline static int quadRenderEnabled = 1;
 	inline static int rendererDebugContext = 0;
 	inline static int rendererGLMajor = 0;
 	inline static int rendererGLMinor = 0;
